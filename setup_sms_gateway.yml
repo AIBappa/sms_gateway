@@ -12,7 +12,7 @@
     pg_port: 5432
     keydb_port: 6379
     prometheus_port: 9090
-    grafana_port: 3000
+    grafana_port: 3001
     python_receiver_port: 8080
     python_receiver_image: "sms_receiver_image"
 
@@ -103,8 +103,8 @@
               - "{{ pg_port }}:5432"
 
           keydb:
-            image: eqalpha/keydb:latest
-            command: keydb-server --maxmemory 256mb --maxclients 1000 --requirepass "{{ keydb_password }}"
+            image: redis:7-alpine
+            command: ["redis-server", "--maxmemory", "256mb", "--maxclients", "1000", "--requirepass", "{{ keydb_password }}"]
             ports:
               - "{{ keydb_port }}:6379"
 
@@ -135,7 +135,7 @@
 
           redis_exporter:
             image: oliver006/redis_exporter
-            command: ["--redis.address=redis://:{{ keydb_password }}@keydb:6379"]
+            command: ["-redis.addr=redis://:{{ keydb_password }}@keydb:6379"]
             depends_on:
               - keydb
             ports:
@@ -168,3 +168,23 @@
 
   - name: Start all containers
     shell: docker-compose -f ~/sms_gateway/docker-compose.yml up -d
+
+  - name: Show container status with verbose output
+    shell: |
+      echo "=== Container Status ==="
+      docker-compose -f ~/sms_gateway/docker-compose.yml ps -a
+      echo ""
+      echo "=== KeyDB Container Logs ==="
+      docker-compose -f ~/sms_gateway/docker-compose.yml logs keydb
+      echo ""
+      echo "=== SMS Receiver Container Logs ==="
+      docker-compose -f ~/sms_gateway/docker-compose.yml logs sms_receiver
+      echo ""
+      echo "=== Redis Exporter Container Logs ==="
+      docker-compose -f ~/sms_gateway/docker-compose.yml logs redis_exporter
+    register: container_debug
+    ignore_errors: yes
+
+  - name: Display debug output
+    debug:
+      var: container_debug.stdout_lines

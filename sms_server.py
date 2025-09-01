@@ -13,8 +13,10 @@ try:
         config = json.load(f)
     LOG_FILE = config.get('log_file', 'sms_log.txt')
 except FileNotFoundError:
+    config = {}
     LOG_FILE = 'sms_log.txt'
 except json.JSONDecodeError:
+    config = {}
     LOG_FILE = 'sms_log.txt'
 
 # Load secrets from environment with fallback to config.json

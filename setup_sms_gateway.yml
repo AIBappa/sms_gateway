@@ -1,0 +1,170 @@
+---
+- name: Deploy SMS Gateway Infrastructure with Vault
+  hosts: localhost
+  become: yes
+
+  vars_files:
+    - vault.yml  # Encrypted vault file
+
+  vars:
+    pg_user: "sms_user"
+    pg_db: "sms_gateway"
+    pg_port: 5432
+    keydb_port: 6379
+    prometheus_port: 9090
+    grafana_port: 3000
+    python_receiver_port: 8080
+    python_receiver_image: "sms_receiver_image"
+
+  tasks:
+  # - name: Install Docker
+  #   apt:
+  #     name: docker.io
+  #     state: present
+  #     update_cache: true
+
+  # - name: Install Docker Compose
+  #   apt:
+  #     name: docker-compose
+  #     state: present
+
+  - name: Create project directory
+    file:
+      path: ~/sms_gateway
+      state: directory
+
+  - name: Copy PostgreSQL initialization script
+    copy:
+      dest: ~/sms_gateway/init.sql
+      content: |
+        CREATE USER {{ pg_user }} WITH PASSWORD '{{ pg_password }}';
+        CREATE DATABASE {{ pg_db }} OWNER {{ pg_user }};
+        \connect {{ pg_db }};
+        CREATE TABLE IF NOT EXISTS sms_senders (
+          sender VARCHAR(32) PRIMARY KEY,
+          first_seen TIMESTAMPTZ DEFAULT now(),
+          last_seen TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS sms_messages (
+          id SERIAL PRIMARY KEY,
+          sender VARCHAR(32) REFERENCES sms_senders(sender),
+          message TEXT,
+          timestamp TIMESTAMPTZ DEFAULT now(),
+          forwarded BOOLEAN DEFAULT FALSE
+        );
+        CREATE INDEX IF NOT EXISTS idx_sms_sender ON sms_messages(sender);
+
+  - name: Copy Dockerfile for Python SMS receiver
+    copy:
+      dest: ~/sms_gateway/Dockerfile
+      content: |
+        FROM python:3.11-slim
+        WORKDIR /app
+        COPY sms_server.py /app/sms_server.py
+        RUN pip install --no-cache-dir psycopg2-binary redis requests
+        EXPOSE 8080
+        CMD ["python", "sms_server.py"]
+
+  - name: Copy Python SMS server script
+    copy:
+      src: ./sms_server.py
+      dest: ~/sms_gateway/sms_server.py
+
+  - name: Create Prometheus configuration
+    copy:
+      dest: ~/sms_gateway/prometheus.yml
+      content: |
+        global:
+          scrape_interval: 15s
+        scrape_configs:
+          - job_name: 'postgres_exporter'
+            static_configs:
+              - targets: ['host.docker.internal:9187']
+          - job_name: 'redis_exporter'
+            static_configs:
+              - targets: ['host.docker.internal:9121']
+
+  - name: Create docker-compose.yml with vaulted secrets
+    copy:
+      dest: ~/sms_gateway/docker-compose.yml
+      content: |
+        version: '3.8'
+        services:
+          postgres:
+            image: postgres:15
+            environment:
+              POSTGRES_PASSWORD: "{{ pg_password }}"
+              POSTGRES_USER: "{{ pg_user }}"
+              POSTGRES_DB: "{{ pg_db }}"
+            volumes:
+              - pg_data:/var/lib/postgresql/data
+              - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+            ports:
+              - "{{ pg_port }}:5432"
+
+          keydb:
+            image: eqalpha/keydb:latest
+            command: keydb-server --maxmemory 256mb --maxclients 1000 --requirepass "{{ keydb_password }}"
+            ports:
+              - "{{ keydb_port }}:6379"
+
+          prometheus:
+            image: prom/prometheus:latest
+            volumes:
+              - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+            ports:
+              - "{{ prometheus_port }}:9090"
+
+          grafana:
+            image: grafana/grafana:latest
+            environment:
+              - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+            ports:
+              - "{{ grafana_port }}:3000"
+            depends_on:
+              - prometheus
+
+          postgres_exporter:
+            image: prometheuscommunity/postgres-exporter
+            environment:
+              DATA_SOURCE_NAME: "postgresql://{{ pg_user }}:{{ pg_password }}@postgres:5432/{{ pg_db }}?sslmode=disable"
+            depends_on:
+              - postgres
+            ports:
+              - "9187:9187"
+
+          redis_exporter:
+            image: oliver006/redis_exporter
+            command: ["--redis.address=redis://:{{ keydb_password }}@keydb:6379"]
+            depends_on:
+              - keydb
+            ports:
+              - "9121:9121"
+
+          sms_receiver:
+            build: .
+            ports:
+              - "{{ python_receiver_port }}:8080"
+            environment:
+              - CF_API_KEY={{ cf_api_key }}
+              - CF_BACKEND_URL={{ cf_backend_url }}
+              - POSTGRES_HOST=postgres
+              - POSTGRES_DB={{ pg_db }}
+              - POSTGRES_USER={{ pg_user }}
+              - POSTGRES_PASSWORD={{ pg_password }}
+              - POSTGRES_PORT=5432
+              - REDIS_HOST=keydb
+              - REDIS_PORT=6379
+              - REDIS_PASSWORD={{ keydb_password }}
+            depends_on:
+              - postgres
+              - keydb
+
+        volumes:
+          pg_data:
+
+  - name: Build Python SMS receiver Docker image
+    shell: docker-compose -f ~/sms_gateway/docker-compose.yml build sms_receiver
+
+  - name: Start all containers
+    shell: docker-compose -f ~/sms_gateway/docker-compose.yml up -d

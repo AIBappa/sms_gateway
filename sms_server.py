@@ -33,6 +33,8 @@ except (FileNotFoundError, json.JSONDecodeError):
 CF_BACKEND_URL = os.getenv('CF_BACKEND_URL', config.get('cf_endpoint', 'https://default-url-if-not-set'))
 API_KEY = os.getenv('CF_API_KEY', config.get('cf_api_key', ''))
 
+HASH_SECRET_KEY = os.getenv('HASH_SECRET_KEY', '')  # Added for hash validation
+
 POSTGRES_CONFIG = {
     'host': os.getenv('POSTGRES_HOST', 'localhost'),
     'database': os.getenv('POSTGRES_DB', 'sms_gateway'),

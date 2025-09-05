@@ -16,8 +16,21 @@
     grafana_port: 3001
     python_receiver_port: 8080
     python_receiver_image: "sms_receiver_image"
+    hash_secret_key: "{{ hash_secret_key }}"  # Reference from vault
 
   tasks:
+    # - name: Install Docker
+    #   apt:
+    #     name: docker.io
+    #     state: present
+    #     update_cache: true
+
+    # - name: Install Docker Compose
+    #   apt:
+    #     name: docker-compose
+    #     state: present
+    #     update_cache: true
+
     - name: Install required packages (including pgbouncer)
       apt:
         name:
@@ -247,6 +260,7 @@
                 - REDIS_HOST=keydb
                 - REDIS_PORT=6379
                 - REDIS_PASSWORD={{ keydb_password }}
+                - HASH_SECRET_KEY={{ hash_secret_key }}  # Added for hash validation
               depends_on:
                 - postgres
                 - pgbouncer

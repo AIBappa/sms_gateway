@@ -141,9 +141,9 @@ Database Schema Deployment:
 
     Configure PostgreSQL for connection pooling
 
-Redis/KeyDB Setup:
+Redis Setup:
 
-    Install and configure Redis/KeyDB
+    Install and configure Redis
 
     Configure persistence and memory settings
 

@@ -20,8 +20,8 @@
 # Database password (fake: replace with your PostgreSQL user password)
 pg_password: 'fake_pg_password_123'
 
-# Redis/KeyDB password (fake: replace with your Redis password)
-keydb_password: 'fake_redis_password_456'
+# Redis password (fake: replace with your Redis password)
+redis_password: 'fake_redis_password_456'
 
 # Grafana admin password (fake: replace with your Grafana admin password)
 grafana_admin_password: 'fake_grafana_admin_789'

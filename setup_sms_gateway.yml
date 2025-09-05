@@ -10,6 +10,7 @@
     pg_user: "sms_user"
     pg_db: "sms_gateway"
     pg_port: 5432
+    pgbouncer_port: 6432
     keydb_port: 6379
     prometheus_port: 9090
     grafana_port: 3001
@@ -17,174 +18,265 @@
     python_receiver_image: "sms_receiver_image"
 
   tasks:
-  # - name: Install Docker
-  #   apt:
-  #     name: docker.io
-  #     state: present
-  #     update_cache: true
+    - name: Install required packages (including pgbouncer)
+      apt:
+        name:
+          - postgresql-client
+          - pgbouncer
+          - redis-server
+        state: present
+        update_cache: true
 
-  # - name: Install Docker Compose
-  #   apt:
-  #     name: docker-compose
-  #     state: present
+    - name: Create project directory
+      file:
+        path: ~/sms_gateway
+        state: directory
 
-  - name: Create project directory
-    file:
-      path: ~/sms_gateway
-      state: directory
+    - name: Copy PostgreSQL initialization script with new schema
+      copy:
+        dest: ~/sms_gateway/init.sql
+        content: |
+          CREATE USER {{ pg_user }} WITH PASSWORD '{{ pg_password }}';
+          CREATE DATABASE {{ pg_db }} OWNER {{ pg_user }};
+          \connect {{ pg_db }};
+          -- Include full schema from schema.sql here or reference it
+          \i /docker-entrypoint-initdb.d/schema.sql;
 
-  - name: Copy PostgreSQL initialization script
-    copy:
-      dest: ~/sms_gateway/init.sql
-      content: |
-        CREATE USER {{ pg_user }} WITH PASSWORD '{{ pg_password }}';
-        CREATE DATABASE {{ pg_db }} OWNER {{ pg_user }};
-        \connect {{ pg_db }};
-        CREATE TABLE IF NOT EXISTS sms_senders (
-          sender VARCHAR(32) PRIMARY KEY,
-          first_seen TIMESTAMPTZ DEFAULT now(),
-          last_seen TIMESTAMPTZ DEFAULT now()
-        );
-        CREATE TABLE IF NOT EXISTS sms_messages (
-          id SERIAL PRIMARY KEY,
-          sender VARCHAR(32) REFERENCES sms_senders(sender),
-          message TEXT,
-          timestamp TIMESTAMPTZ DEFAULT now(),
-          forwarded BOOLEAN DEFAULT FALSE
-        );
-        CREATE INDEX IF NOT EXISTS idx_sms_sender ON sms_messages(sender);
+    - name: Copy database schema file
+      copy:
+        src: ./schema.sql
+        dest: ~/sms_gateway/schema.sql
 
-  - name: Copy Dockerfile for Python SMS receiver
-    copy:
-      dest: ~/sms_gateway/Dockerfile
-      content: |
-        FROM python:3.11-slim
-        WORKDIR /app
-        COPY sms_server.py /app/sms_server.py
-        RUN pip install --no-cache-dir psycopg2-binary redis requests
-        EXPOSE 8080
-        CMD ["python", "sms_server.py"]
+    - name: Configure pgbouncer
+      copy:
+        dest: /etc/pgbouncer/pgbouncer.ini
+        content: |
+          [databases]
+          {{ pg_db }} = host=localhost port=5432 dbname={{ pg_db }} user={{ pg_user }} password={{ pg_password }}
+          
+          [pgbouncer]
+          listen_port = {{ pgbouncer_port }}
+          listen_addr = *
+          auth_type = md5
+          auth_file = /etc/pgbouncer/userlist.txt
+          pool_mode = transaction
+          max_client_conn = 1000
+          default_pool_size = 10
+          reserve_pool_size = 5
+          reserve_pool_timeout = 5
+          log_connections = 1
+          log_disconnections = 1
+          log_pooler_errors = 1
 
-  - name: Copy Python SMS server script
-    copy:
-      src: ./sms_server.py
-      dest: ~/sms_gateway/sms_server.py
+    - name: Create pgbouncer userlist
+      copy:
+        dest: /etc/pgbouncer/userlist.txt
+        content: |
+          "{{ pg_user }}" "{{ pg_password }}"
 
-  - name: Create Prometheus configuration
-    copy:
-      dest: ~/sms_gateway/prometheus.yml
-      content: |
-        global:
-          scrape_interval: 15s
-        scrape_configs:
-          - job_name: 'postgres_exporter'
-            static_configs:
-              - targets: ['host.docker.internal:9187']
-          - job_name: 'redis_exporter'
-            static_configs:
-              - targets: ['host.docker.internal:9121']
+    - name: Start and enable pgbouncer service
+      systemd:
+        name: pgbouncer
+        state: started
+        enabled: yes
 
-  - name: Create docker-compose.yml with vaulted secrets
-    copy:
-      dest: ~/sms_gateway/docker-compose.yml
-      content: |
-        version: '3.8'
-        services:
-          postgres:
-            image: postgres:15
-            environment:
-              POSTGRES_PASSWORD: "{{ pg_password }}"
-              POSTGRES_USER: "{{ pg_user }}"
-              POSTGRES_DB: "{{ pg_db }}"
-            volumes:
-              - pg_data:/var/lib/postgresql/data
-              - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-            ports:
-              - "{{ pg_port }}:5432"
+    - name: Configure Redis/KeyDB
+      copy:
+        dest: /etc/redis/redis.conf
+        content: |
+          maxmemory 256mb
+          maxclients 1000
+          requirepass {{ keydb_password }}
+          save 900 1
+          save 300 10
+          save 60 10000
 
-          keydb:
-            image: redis:7-alpine
-            command: ["redis-server", "--maxmemory", "256mb", "--maxclients", "1000", "--requirepass", "{{ keydb_password }}"]
-            ports:
-              - "{{ keydb_port }}:6379"
+    - name: Start and enable Redis service
+      systemd:
+        name: redis-server
+        state: started
+        enabled: yes
 
-          prometheus:
-            image: prom/prometheus:latest
-            volumes:
-              - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-            ports:
-              - "{{ prometheus_port }}:9090"
+    - name: Copy Dockerfile for Python SMS receiver
+      copy:
+        dest: ~/sms_gateway/Dockerfile
+        content: |
+          FROM python:3.11-slim
+          WORKDIR /app
+          COPY sms_server.py /app/sms_server.py
+          COPY checks/ /app/checks/
+          RUN pip install --no-cache-dir psycopg2-binary redis requests fastapi uvicorn asyncpg
+          EXPOSE 8080
+          CMD ["uvicorn", "sms_server:app", "--host", "0.0.0.0", "--port", "8080"]
 
-          grafana:
-            image: grafana/grafana:latest
-            environment:
-              - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
-            ports:
-              - "{{ grafana_port }}:3000"
-            depends_on:
-              - prometheus
+    - name: Copy Python SMS server script
+      copy:
+        src: ./sms_server.py
+        dest: ~/sms_gateway/sms_server.py
 
-          postgres_exporter:
-            image: prometheuscommunity/postgres-exporter
-            environment:
-              DATA_SOURCE_NAME: "postgresql://{{ pg_user }}:{{ pg_password }}@postgres:5432/{{ pg_db }}?sslmode=disable"
-            depends_on:
-              - postgres
-            ports:
-              - "9187:9187"
+    - name: Copy validation check files
+      copy:
+        src: ./checks/
+        dest: ~/sms_gateway/checks/
 
-          redis_exporter:
-            image: oliver006/redis_exporter
-            command: ["-redis.addr=redis://:{{ keydb_password }}@keydb:6379"]
-            depends_on:
-              - keydb
-            ports:
-              - "9121:9121"
+    - name: Create systemd service for SMS server
+      copy:
+        dest: /etc/systemd/system/sms_server.service
+        content: |
+          [Unit]
+          Description=SMS Server
+          After=network.target
+          
+          [Service]
+          ExecStart=/usr/bin/python3 /home/user/sms_gateway/sms_server.py
+          Restart=always
+          User=user
+          
+          [Install]
+          WantedBy=multi-user.target
 
-          sms_receiver:
-            build: .
-            ports:
-              - "{{ python_receiver_port }}:8080"
-            environment:
-              - CF_API_KEY={{ cf_api_key }}
-              - CF_BACKEND_URL={{ cf_backend_url }}
-              - POSTGRES_HOST=postgres
-              - POSTGRES_DB={{ pg_db }}
-              - POSTGRES_USER={{ pg_user }}
-              - POSTGRES_PASSWORD={{ pg_password }}
-              - POSTGRES_PORT=5432
-              - REDIS_HOST=keydb
-              - REDIS_PORT=6379
-              - REDIS_PASSWORD={{ keydb_password }}
-            depends_on:
-              - postgres
-              - keydb
+    - name: Enable and start SMS server service
+      systemd:
+        name: sms_server
+        state: started
+        enabled: yes
 
-        volumes:
-          pg_data:
+    - name: Create Prometheus configuration
+      copy:
+        dest: ~/sms_gateway/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: 'postgres_exporter'
+              static_configs:
+                - targets: ['localhost:9187']
+            - job_name: 'redis_exporter'
+              static_configs:
+                - targets: ['localhost:9121']
+            - job_name: 'sms_server'
+              static_configs:
+                - targets: ['localhost:8080']
 
-  - name: Build Python SMS receiver Docker image
-    shell: docker-compose -f ~/sms_gateway/docker-compose.yml build sms_receiver
+    - name: Create docker-compose.yml with vaulted secrets
+      copy:
+        dest: ~/sms_gateway/docker-compose.yml
+        content: |
+          version: '3.8'
+          services:
+            postgres:
+              image: postgres:15
+              environment:
+                POSTGRES_PASSWORD: "{{ pg_password }}"
+                POSTGRES_USER: "{{ pg_user }}"
+                POSTGRES_DB: "{{ pg_db }}"
+              volumes:
+                - pg_data:/var/lib/postgresql/data
+                - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+                - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+              ports:
+                - "{{ pg_port }}:5432"
 
-  - name: Start all containers
-    shell: docker-compose -f ~/sms_gateway/docker-compose.yml up -d
+            pgbouncer:
+              image: brainsam/pgbouncer
+              environment:
+                DB_HOST: postgres
+                DB_PORT: 5432
+                DB_USER: "{{ pg_user }}"
+                DB_PASSWORD: "{{ pg_password }}"
+                DB_NAME: "{{ pg_db }}"
+                POOL_MODE: transaction
+                MAX_CLIENT_CONN: 1000
+                DEFAULT_POOL_SIZE: 10
+              ports:
+                - "{{ pgbouncer_port }}:6432"
+              depends_on:
+                - postgres
 
-  - name: Show container status with verbose output
-    shell: |
-      echo "=== Container Status ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml ps -a
-      echo ""
-      echo "=== KeyDB Container Logs ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml logs keydb
-      echo ""
-      echo "=== SMS Receiver Container Logs ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml logs sms_receiver
-      echo ""
-      echo "=== Redis Exporter Container Logs ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml logs redis_exporter
-    register: container_debug
-    ignore_errors: yes
+            keydb:
+              image: redis:7-alpine
+              command: ["redis-server", "--maxmemory", "256mb", "--maxclients", "1000", "--requirepass", "{{ keydb_password }}"]
+              ports:
+                - "{{ keydb_port }}:6379"
 
-  - name: Display debug output
-    debug:
-      var: container_debug.stdout_lines
+            prometheus:
+              image: prom/prometheus:latest
+              volumes:
+                - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+              ports:
+                - "{{ prometheus_port }}:9090"
+
+            grafana:
+              image: grafana/grafana:latest
+              environment:
+                - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+              ports:
+                - "{{ grafana_port }}:3000"
+              depends_on:
+                - prometheus
+
+            postgres_exporter:
+              image: prometheuscommunity/postgres-exporter
+              environment:
+                DATA_SOURCE_NAME: "postgresql://{{ pg_user }}:{{ pg_password }}@postgres:5432/{{ pg_db }}?sslmode=disable"
+              depends_on:
+                - postgres
+              ports:
+                - "9187:9187"
+
+            redis_exporter:
+              image: oliver006/redis_exporter
+              command: ["-redis.addr=redis://:{{ keydb_password }}@keydb:6379"]
+              depends_on:
+                - keydb
+              ports:
+                - "9121:9121"
+
+            sms_receiver:
+              build: .
+              ports:
+                - "{{ python_receiver_port }}:8080"
+              environment:
+                - CF_API_KEY={{ cf_api_key }}
+                - CF_BACKEND_URL={{ cf_backend_url }}
+                - POSTGRES_HOST=pgbouncer
+                - POSTGRES_DB={{ pg_db }}
+                - POSTGRES_USER={{ pg_user }}
+                - POSTGRES_PASSWORD={{ pg_password }}
+                - POSTGRES_PORT={{ pgbouncer_port }}
+                - REDIS_HOST=keydb
+                - REDIS_PORT=6379
+                - REDIS_PASSWORD={{ keydb_password }}
+              depends_on:
+                - postgres
+                - pgbouncer
+                - keydb
+
+          volumes:
+            pg_data:
+
+    - name: Build Python SMS receiver Docker image
+      shell: docker-compose -f ~/sms_gateway/docker-compose.yml build sms_receiver
+
+    - name: Start all containers
+      shell: docker-compose -f ~/sms_gateway/docker-compose.yml up -d
+
+    - name: Show container status with verbose output
+      shell: |
+        echo "=== Container Status ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml ps -a
+        echo ""
+        echo "=== KeyDB Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs keydb
+        echo ""
+        echo "=== SMS Receiver Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs sms_receiver
+        echo ""
+        echo "=== Redis Exporter Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs redis_exporter
+      register: container_debug
+      ignore_errors: yes
+
+    - name: Display debug output
+      debug:
+        var: container_debug.stdout_lines

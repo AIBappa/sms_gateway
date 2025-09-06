@@ -101,14 +101,21 @@ logger.info(f"Logs will be written to: {LOG_DIR}")
 async def get_db_pool():
     global pool
     if pool is None:
-        pool = await asyncpg.create_pool(**POSTGRES_CONFIG, min_size=1, max_size=10)
+        # Disable statement cache for PgBouncer compatibility
+        pool = await asyncpg.create_pool(**POSTGRES_CONFIG, min_size=1, max_size=10, statement_cache_size=0)
     return pool
 
 async def get_setting(key: str):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
         result = await conn.fetchval("SELECT setting_value FROM system_settings WHERE setting_key = $1", key)
-        return json.loads(result) if result else None
+        if result is None:
+            return None
+        # Try to parse as JSON, if it fails return as string
+        try:
+            return json.loads(result)
+        except (json.JSONDecodeError, TypeError):
+            return result
 
 async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
     check_sequence = await get_setting('check_sequence')
@@ -116,12 +123,21 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
     pool = await get_db_pool()
     
     for sms in batch_sms_data:
-        results = {}
+        # Initialize all check results to 0 (not run)
+        results = {
+            'blacklist_check': 0,
+            'duplicate_check': 0,
+            'header_check': 0,
+            'hash_length_check': 0,
+            'mobile_check': 0,
+            'time_window_check': 0
+        }
         overall_status = 'valid'
         failed_check = None
         
         for check_name in check_sequence:
             if not check_enabled.get(check_name, False):
+                results[f'{check_name}_check'] = 3  # skipped
                 continue
             
             check_func = globals()[f'validate_{check_name}_check']
@@ -142,7 +158,16 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
                                          blacklist_check, duplicate_check, header_check, hash_length_check, 
                                          mobile_check, time_window_check)
                 VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (uuid) DO UPDATE SET ...
+                ON CONFLICT (uuid) DO UPDATE SET 
+                    overall_status = EXCLUDED.overall_status,
+                    failed_at_check = EXCLUDED.failed_at_check,
+                    processing_completed_at = EXCLUDED.processing_completed_at,
+                    blacklist_check = EXCLUDED.blacklist_check,
+                    duplicate_check = EXCLUDED.duplicate_check,
+                    header_check = EXCLUDED.header_check,
+                    hash_length_check = EXCLUDED.hash_length_check,
+                    mobile_check = EXCLUDED.mobile_check,
+                    time_window_check = EXCLUDED.time_window_check
             """, sms.uuid, overall_status, failed_check, *results.values())
         
         if overall_status == 'valid':

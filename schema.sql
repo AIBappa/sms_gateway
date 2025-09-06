@@ -4,11 +4,13 @@ CREATE TABLE input_sms (
     sender_number VARCHAR(15) NOT NULL,
     sms_message TEXT NOT NULL,
     received_timestamp TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    INDEX idx_uuid_btree (uuid),
-    INDEX idx_received_timestamp (received_timestamp),
-    INDEX idx_created_at (created_at)
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Indexes for input_sms
+CREATE INDEX idx_uuid_btree ON input_sms (uuid);
+CREATE INDEX idx_received_timestamp ON input_sms (received_timestamp);
+CREATE INDEX idx_created_at ON input_sms (created_at);
 
 -- 2. sms_monitor
 CREATE TABLE sms_monitor (
@@ -24,11 +26,13 @@ CREATE TABLE sms_monitor (
     processing_completed_at TIMESTAMPTZ,
     failed_at_check VARCHAR(20),
     batch_id UUID,
-    retry_count INTEGER DEFAULT 0,
-    INDEX idx_overall_status (overall_status),
-    INDEX idx_batch_id (batch_id),
-    INDEX idx_processing_started (processing_started_at)
+    retry_count INTEGER DEFAULT 0
 );
+
+-- Indexes for sms_monitor
+CREATE INDEX idx_overall_status ON sms_monitor (overall_status);
+CREATE INDEX idx_batch_id ON sms_monitor (batch_id);
+CREATE INDEX idx_processing_started ON sms_monitor (processing_started_at);
 
 -- 3. system_settings
 CREATE TABLE system_settings (
@@ -60,10 +64,12 @@ CREATE TABLE out_sms (
     sms_message TEXT NOT NULL,
     validation_status VARCHAR(20) DEFAULT 'valid',
     forwarded_timestamp TIMESTAMPTZ DEFAULT NOW(),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    INDEX idx_sender_number (sender_number),
-    INDEX idx_forwarded_timestamp (forwarded_timestamp)
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Indexes for out_sms
+CREATE INDEX idx_sender_number ON out_sms (sender_number);
+CREATE INDEX idx_forwarded_timestamp ON out_sms (forwarded_timestamp);
 
 -- 5. blacklist_sms
 CREATE TABLE blacklist_sms (

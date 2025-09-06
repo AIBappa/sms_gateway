@@ -54,9 +54,49 @@ app = FastAPI()
 redis_client = redis.StrictRedis(**REDIS_CONFIG)
 pool = None
 
-# Logging setup
-logging.basicConfig(level=logging.INFO)
+# Logging setup with file handlers for persistent logging
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+LOG_DIR = os.getenv('LOG_DIR', '/app/logs')
+
+# Ensure log directory exists
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Configure logging with both file and console handlers
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()  # Console output for Docker logs
+    ]
+)
+
+# Add rotating file handlers for persistent logging
+from logging.handlers import RotatingFileHandler
+
+# Create rotating file handler for general logs
+rotating_handler = RotatingFileHandler(
+    f'{LOG_DIR}/sms_server.log',
+    maxBytes=50*1024*1024,  # 50MB
+    backupCount=5
+)
+rotating_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Create rotating file handler for errors
+error_handler = RotatingFileHandler(
+    f'{LOG_DIR}/sms_server_errors.log',
+    maxBytes=50*1024*1024,  # 50MB
+    backupCount=5
+)
+error_handler.setLevel(logging.ERROR)
+error_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Add handlers to root logger
+logging.getLogger().addHandler(rotating_handler)
+logging.getLogger().addHandler(error_handler)
+
 logger = logging.getLogger(__name__)
+logger.info(f"SMS Server starting with log level: {LOG_LEVEL}")
+logger.info(f"Logs will be written to: {LOG_DIR}")
 
 async def get_db_pool():
     global pool

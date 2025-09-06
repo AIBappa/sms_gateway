@@ -136,3 +136,110 @@ All passwords are encrypted in `vault.yml`. To access:
 #### Setting Up Default Text Editor
 - **On Linux (Bash)**: Ansible uses the `EDITOR` environment variable. Set it temporarily with `export EDITOR=vim` or permanently by adding `export EDITOR=vim` to `~/.bashrc`. Common editors: `vim`, `nano`, `emacs`, `gedit`.
 - **On Windows**: If using WSL, Git Bash, or Cygwin, set `export EDITOR=notepad` or `export EDITOR="C:/Program Files/Notepad++/notepad++.exe"`. Common editors: Notepad, Notepad++, VS Code. Note: Direct Windows Ansible may require adjustments.
+
+## Testing and Validation
+
+### Key Endpoint Tests
+Use these curl commands to test all system endpoints and validate functionality:
+
+#### 1. Health Check
+```bash
+curl -s http://localhost:8080/health
+# Expected response: {"status":"healthy"}
+```
+
+#### 2. SMS Receiver - Send Test SMS
+```bash
+curl -X POST http://localhost:8080/sms/receive \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sender_number": "+1234567890",
+    "sms_message": "This is a test SMS message from mobile 9876543210",
+    "received_timestamp": "2025-09-06T12:00:00Z"
+  }'
+# Expected response: {"status":"received"}
+```
+
+#### 3. Prometheus Metrics
+```bash
+# Check if Prometheus is collecting metrics
+curl -s http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job, health}'
+
+# Check specific PostgreSQL metrics
+curl -s http://localhost:9187/metrics | grep -E "pg_stat_database|pg_up"
+
+# Check Redis metrics
+curl -s http://localhost:9121/metrics | grep -E "redis_up|redis_connected_clients"
+```
+
+#### 4. Database Connectivity Tests
+```bash
+# Test PostgreSQL direct connection
+docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT COUNT(*) FROM input_sms;"
+
+# Test PgBouncer connection
+docker exec sms_gateway-postgres-1 psql -U postgres -h localhost -p 6432 -d sms_gateway -c "SELECT setting_key, setting_value FROM system_settings LIMIT 5;"
+```
+
+#### 5. Redis Connectivity Test
+```bash
+# Test Redis connection and check SMS numbers cache
+docker exec sms_gateway-redis-1 redis-cli -a "$(ansible-vault view vault.yml | grep redis_password | cut -d':' -f2 | tr -d ' ')" SMEMBERS out_sms_numbers
+```
+
+#### 6. SMS Processing Workflow Test
+```bash
+# Send multiple test SMS messages
+for i in {1..3}; do
+  curl -X POST http://localhost:8080/sms/receive \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"sender_number\": \"+12345678$i$i\",
+      \"sms_message\": \"Test message $i with mobile 987654321$i\",
+      \"received_timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+    }"
+  echo " - SMS $i sent"
+  sleep 2
+done
+
+# Check if messages were processed
+echo "Checking processed messages..."
+docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_input FROM input_sms;"
+docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_output FROM out_sms;"
+docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT overall_status, COUNT(*) FROM sms_monitor GROUP BY overall_status;"
+```
+
+#### 7. Grafana Dashboard Access
+```bash
+# Open Grafana in browser (manual step)
+echo "Open http://localhost:3001 in your browser"
+echo "Login: admin"
+echo "Password: Use 'ansible-vault view vault.yml' to get grafana_admin_password"
+```
+
+### Validation Checklist
+After running the tests above, verify:
+- [ ] Health endpoint responds with 200 status
+- [ ] SMS messages are accepted and stored in `input_sms` table
+- [ ] Validation checks process messages (check `sms_monitor` table)
+- [ ] Valid messages appear in `out_sms` table and Redis cache
+- [ ] Prometheus scrapes metrics from all exporters
+- [ ] Grafana displays PostgreSQL dashboard with live data
+- [ ] All containers remain healthy after processing load
+
+### Troubleshooting Commands
+```bash
+# Check container status
+docker ps
+
+# View recent logs for all services
+docker-compose -f ~/sms_gateway/docker-compose.yml logs --tail=20
+
+# Check specific service logs
+docker logs sms_gateway-sms_receiver-1 --tail=50
+
+# Monitor real-time resource usage
+docker stats
+
+# Restart specific service if needed
+docker-compose -f ~/sms_gateway/docker-compose.yml restart sms_receiver

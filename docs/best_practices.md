@@ -358,7 +358,7 @@ docker logs -f sms_receiver
 ```bash
 # === Secure Ansible-based Maintenance ===
 # Navigate to project directory
-cd /home/shantanu/Documents/Software/SMS_Laptop_Setup/sms_gateway
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
 
 # Restart system after configuration changes
 ansible-playbook restart_sms_gateway.yml --ask-vault-pass

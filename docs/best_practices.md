@@ -44,6 +44,14 @@ This document outlines best practices for operating and maintaining the SMS Gate
   - Low disk space on database volumes.
 - **Integration with PgBouncer**: Monitor connection pooling metrics to ensure efficient resource usage and detect bottlenecks.
 
+#### Automated Grafana Setup (New in Setup Script)
+The Ansible playbook now includes automated Grafana configuration:
+- **Automatic Data Source**: Prometheus is automatically configured as the default data source.
+- **Pre-built Dashboard**: A PostgreSQL monitoring dashboard is automatically imported showing database connections and size.
+- **Access**: Open `http://localhost:3001`, log in with `admin` and your `grafana_admin_password` from vault.
+- **Ready to Use**: No manual configuration needed - dashboards and data source are pre-configured.
+- **Customization**: You can still import additional dashboards (like ID 9628) or create custom ones through the UI.
+
 ### Health Checks and Logging
 - Implement health endpoints in services (e.g., /health in the SMS receiver) for automated monitoring.
 - Use rotating log handlers in Python applications to manage log files efficiently.

@@ -152,6 +152,120 @@
               static_configs:
                 - targets: ['localhost:8080']
 
+    - name: Create Grafana provisioning directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - ~/sms_gateway/grafana/provisioning/datasources
+        - ~/sms_gateway/grafana/provisioning/dashboards
+
+    - name: Create Grafana datasource configuration
+      copy:
+        dest: ~/sms_gateway/grafana/provisioning/datasources/prometheus.yml
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://prometheus:9090
+              isDefault: true
+
+    - name: Create Grafana dashboard configuration
+      copy:
+        dest: ~/sms_gateway/grafana/provisioning/dashboards/dashboards.yml
+        content: |
+          apiVersion: 1
+          providers:
+            - name: 'default'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              updateIntervalSeconds: 10
+              allowUiUpdates: true
+              options:
+                path: /etc/grafana/provisioning/dashboards
+
+    - name: Create PostgreSQL monitoring dashboard
+      copy:
+        dest: ~/sms_gateway/grafana/provisioning/dashboards/postgres-dashboard.json
+        content: |
+          {
+            "dashboard": {
+              "id": null,
+              "title": "PostgreSQL Database",
+              "tags": [ "postgresql" ],
+              "style": "dark",
+              "timezone": "browser",
+              "panels": [
+                {
+                  "id": 1,
+                  "title": "Database Connections",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "pg_stat_database_numbackends{datname=\"sms_gateway\"}",
+                      "legendFormat": "Active Connections"
+                    }
+                  ],
+                  "yAxes": [
+                    {
+                      "label": "Connections",
+                      "min": 0
+                    }
+                  ],
+                  "xAxes": [
+                    {
+                      "mode": "time"
+                    }
+                  ],
+                  "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 0
+                  }
+                },
+                {
+                  "id": 2,
+                  "title": "Database Size",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "pg_database_size_bytes{datname=\"sms_gateway\"}",
+                      "legendFormat": "Database Size"
+                    }
+                  ],
+                  "yAxes": [
+                    {
+                      "label": "Bytes",
+                      "min": 0
+                    }
+                  ],
+                  "xAxes": [
+                    {
+                      "mode": "time"
+                    }
+                  ],
+                  "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 0
+                  }
+                }
+              ],
+              "time": {
+                "from": "now-1h",
+                "to": "now"
+              },
+              "refresh": "5s"
+            }
+          }
+
     - name: Create docker-compose.yml with vaulted secrets
       copy:
         dest: ~/sms_gateway/docker-compose.yml
@@ -204,6 +318,8 @@
               image: grafana/grafana:latest
               environment:
                 - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+              volumes:
+                - ./grafana/provisioning:/etc/grafana/provisioning:ro
               ports:
                 - "{{ grafana_port }}:3000"
               depends_on:

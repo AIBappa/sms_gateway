@@ -6,7 +6,14 @@ This document outlines best practices for operating and maintaining the SMS Gate
 
 ### Credential Management
 - Use Ansible Vault to encrypt sensitive credentials in `vault.yml`.
-- Avoid hardcoding usernames, passwords, or API keys in configuration files.
+- Avoid hardcoding usernames, password#### Maintenance Operations
+```bash
+# === Secure Ansible-based Maintenance ===
+# Navigate to project directory
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+
+# Restart system after configuration changes
+ansible-playbook restart_sms_gateway.yml --ask-vault-passI keys in configuration files.
 - Regularly rotate credentials and update the vault file.
 
 ### Database Security
@@ -175,16 +182,18 @@ curl -s http://localhost:9121/metrics | grep -E "redis_up|redis_connected_client
 #### 4. Database Connectivity Tests
 ```bash
 # Test PostgreSQL direct connection
-docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT COUNT(*) FROM input_sms;"
+docker exec postgres psql -U postgres -d sms_gateway -c "SELECT COUNT(*) FROM input_sms;"
 
 # Test PgBouncer connection
-docker exec sms_gateway-postgres-1 psql -U postgres -h localhost -p 6432 -d sms_gateway -c "SELECT setting_key, setting_value FROM system_settings LIMIT 5;"
+docker exec postgres psql -U postgres -h localhost -p 6432 -d sms_gateway -c "SELECT setting_key, setting_value FROM system_settings LIMIT 5;"
 ```
 
 #### 5. Redis Connectivity Test
 ```bash
 # Test Redis connection and check SMS numbers cache
-docker exec sms_gateway-redis-1 redis-cli -a "$(ansible-vault view vault.yml | grep redis_password | cut -d':' -f2 | tr -d ' ')" SMEMBERS out_sms_numbers
+# Note: You'll need to get the Redis password from vault manually
+echo "Use 'ansible-vault view vault.yml' to get redis_password, then:"
+echo "docker exec redis redis-cli -a <redis_password> SMEMBERS out_sms_numbers"
 ```
 
 #### 6. SMS Processing Workflow Test
@@ -204,9 +213,9 @@ done
 
 # Check if messages were processed
 echo "Checking processed messages..."
-docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_input FROM input_sms;"
-docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_output FROM out_sms;"
-docker exec sms_gateway-postgres-1 psql -U postgres -d sms_gateway -c "SELECT overall_status, COUNT(*) FROM sms_monitor GROUP BY overall_status;"
+docker exec postgres psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_input FROM input_sms;"
+docker exec postgres psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_output FROM out_sms;"
+docker exec postgres psql -U postgres -d sms_gateway -c "SELECT overall_status, COUNT(*) FROM sms_monitor GROUP BY overall_status;"
 ```
 
 #### 7. Grafana Dashboard Access
@@ -232,14 +241,137 @@ After running the tests above, verify:
 # Check container status
 docker ps
 
-# View recent logs for all services
-docker-compose -f ~/sms_gateway/docker-compose.yml logs --tail=20
-
-# Check specific service logs
-docker logs sms_gateway-sms_receiver-1 --tail=50
+# View recent logs for specific services
+docker logs sms_receiver --tail=50
+docker logs postgres --tail=50
+docker logs redis --tail=50
+docker logs grafana --tail=50
 
 # Monitor real-time resource usage
 docker stats
 
-# Restart specific service if needed
-docker-compose -f ~/sms_gateway/docker-compose.yml restart sms_receiver
+# Restart specific service using Ansible (secure method)
+ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+
+# Check individual container status
+docker inspect sms_receiver
+docker inspect postgres
+```
+
+## Deployment Management
+
+### Starting the SMS Gateway System
+
+#### Using Ansible (Secure Method - Recommended)
+```bash
+# Navigate to project directory
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+
+# Start complete deployment with vault credentials
+ansible-playbook setup_sms_gateway.yml --ask-vault-pass
+
+# Start deployment with verbose output for debugging
+ansible-playbook setup_sms_gateway.yml --ask-vault-pass -vvv
+```
+
+### Stopping the SMS Gateway System
+
+#### Using Ansible (Secure Method)
+```bash
+# Navigate to project directory
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+
+# Stop all SMS Gateway containers
+ansible-playbook stop_sms_gateway.yml
+
+# Restart all SMS Gateway containers with vault credentials
+ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+```
+
+#### Emergency Stop (Direct Docker - Use with Caution)
+```bash
+# Force stop all SMS Gateway containers
+docker stop postgres redis pgbouncer postgres_exporter redis_exporter prometheus grafana sms_receiver
+
+# Force remove all SMS Gateway containers (DESTROYS DATA)
+docker rm postgres redis pgbouncer postgres_exporter redis_exporter prometheus grafana sms_receiver
+```
+
+### Ansible-based Management Commands
+
+#### Using Pre-created Ansible Playbooks (Secure Method)
+The project includes dedicated Ansible playbooks for secure container management:
+
+```bash
+# Navigate to project directory
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+
+# Stop all SMS Gateway containers securely
+ansible-playbook stop_sms_gateway.yml
+
+# Restart all SMS Gateway containers with vault credentials
+ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+```
+
+#### Features of the Ansible Management Playbooks
+
+**Stop Playbook (`stop_sms_gateway.yml`):**
+- Gracefully stops all SMS Gateway containers using Ansible Docker modules
+- Shows status of remaining containers for verification
+- Provides clear feedback on operation completion
+- No credential exposure in commands or logs
+
+**Restart Playbook (`restart_sms_gateway.yml`):**
+- Performs complete stop and restart cycle using vault-encrypted credentials
+- Includes proper wait times for container lifecycle
+- Shows container status after restart
+- Tests health endpoint to verify SMS receiver is operational
+- All passwords remain encrypted in vault.yml
+
+### Quick Reference Commands
+
+#### Daily Operations
+```bash
+# === Using Ansible (Secure Method - Recommended) ===
+# Navigate to project directory first
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+
+# Stop SMS Gateway system
+ansible-playbook stop_sms_gateway.yml
+
+# Restart SMS Gateway system with vault credentials
+ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+
+# === Direct Docker Commands (Use with Caution) ===
+# Check container status
+docker ps
+
+# View logs from specific containers
+docker logs postgres --tail=20
+docker logs sms_receiver --tail=20
+
+# Follow logs in real-time
+docker logs -f sms_receiver
+```
+
+#### Maintenance Operations
+```bash
+# === Secure Ansible-based Maintenance ===
+# Navigate to project directory
+cd /home/shantanu/Documents/Software/SMS_Laptop_Setup/sms_gateway
+
+# Restart system after configuration changes
+ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+
+# === Direct Docker Maintenance (Use with Caution) ===
+# Clean up unused Docker resources
+docker system prune -f
+
+# Backup database before maintenance
+docker exec postgres pg_dump -U postgres sms_gateway > backup_$(date +%Y%m%d_%H%M%S).sql
+
+# Update individual container images
+docker pull postgres:15
+docker pull redis:7-alpine
+docker pull grafana/grafana
+```

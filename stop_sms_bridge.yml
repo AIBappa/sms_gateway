@@ -1,5 +1,5 @@
 ---
-- name: Stop SMS Gateway Infrastructure
+- name: Stop SMS Bridge Infrastructure
   hosts: localhost
   become: no
   connection: local
@@ -53,7 +53,7 @@
         state: stopped
       ignore_errors: yes
     
-    - name: Show remaining SMS Gateway containers
+    - name: Show remaining SMS Bridge containers
       shell: docker ps --filter "name=sms_receiver" --filter "name=grafana" --filter "name=prometheus" --filter "name=redis" --filter "name=postgres" --filter "name=pgbouncer" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
       register: remaining_containers
     
@@ -63,4 +63,4 @@
       
     - name: Show final status
       debug:
-        msg: "SMS Gateway containers stopped successfully"
+        msg: "SMS Bridge containers stopped successfully"

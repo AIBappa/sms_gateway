@@ -1,5 +1,5 @@
 ---
-- name: Deploy SMS Gateway Infrastructure with Vault (Docker Only)
+- name: Deploy SMS Bridge Infrastructure with Vault (Docker Only)
   hosts: localhost
   become: no  # No sudo needed for Docker operations
 
@@ -8,7 +8,7 @@
 
   vars:
     pg_user: "postgres"  # Use default PostgreSQL superuser
-    pg_db: "sms_gateway"
+    pg_db: "sms_bridge"
     pg_port: 5432
     pgbouncer_port: 6432
     redis_port: 6379
@@ -85,24 +85,24 @@
 
     - name: Create project directory
       file:
-        path: ~/sms_gateway
+        path: ~/sms_bridge
         state: directory
 
     - name: Create logs directory for persistent logging
       file:
-        path: ~/sms_gateway/logs
+        path: ~/sms_bridge/logs
         state: directory
         mode: '0755'
 
     - name: Create SMS receiver logs subdirectory
       file:
-        path: ~/sms_gateway/logs/sms_receiver
+        path: ~/sms_bridge/logs/sms_receiver
         state: directory
         mode: '0755'
 
     - name: Copy PostgreSQL initialization script with new schema
       copy:
-        dest: ~/sms_gateway/init.sql
+        dest: ~/sms_bridge/init.sql
         content: |
           -- Just load the schema, no user creation needed
           -- The 'postgres' user is already the superuser with full privileges
@@ -111,11 +111,11 @@
     - name: Copy database schema file
       copy:
         src: ./schema.sql
-        dest: ~/sms_gateway/schema.sql
+        dest: ~/sms_bridge/schema.sql
 
     - name: Copy Dockerfile for Python SMS receiver
       copy:
-        dest: ~/sms_gateway/Dockerfile
+        dest: ~/sms_bridge/Dockerfile
         content: |
           FROM python:3.11-slim
           WORKDIR /app

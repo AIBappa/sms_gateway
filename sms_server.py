@@ -23,7 +23,7 @@ class BatchSMSData(BaseModel):
     received_timestamp: datetime
 
 # Load configuration
-CONFIG_FILE = os.path.expanduser('~/sms_gateway_config.json')
+CONFIG_FILE = os.path.expanduser('~/sms_bridge_config.json')
 try:
     with open(CONFIG_FILE, 'r') as f:
         config = json.load(f)
@@ -37,7 +37,7 @@ HASH_SECRET_KEY = os.getenv('HASH_SECRET_KEY', '')  # Added for hash validation
 
 POSTGRES_CONFIG = {
     'host': os.getenv('POSTGRES_HOST', 'localhost'),
-    'database': os.getenv('POSTGRES_DB', 'sms_gateway'),
+    'database': os.getenv('POSTGRES_DB', 'sms_bridge'),
     'user': os.getenv('POSTGRES_USER', 'sms_user'),
     'password': os.getenv('POSTGRES_PASSWORD', ''),
     'port': int(os.getenv('POSTGRES_PORT', 6432)),  # pgbouncer port

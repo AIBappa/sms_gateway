@@ -3,9 +3,6 @@
   hosts: localhost
   become: yes  # Need sudo for K3s installation only
   
-  vars:
-    k3s_version: "v1.28.8+k3s1"
-
   tasks:
     - name: Debug distribution info
       debug:
@@ -21,16 +18,15 @@
         msg: "K3s is already installed at /usr/local/bin/k3s"
       when: k3s_installed.stat.exists
 
-    - name: Download K3s installation script
-      get_url:
-        url: https://get.k3s.io
-        dest: /tmp/k3s-install.sh
-        mode: '0755'
-      when: not k3s_installed.stat.exists
-
-    - name: Install K3s
+    - name: Install K3s using official method (latest stable)
       shell: |
-        INSTALL_K3S_VERSION={{ k3s_version }} /tmp/k3s-install.sh --write-kubeconfig-mode 644
+        curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+      when: not k3s_installed.stat.exists
+      register: k3s_install_result
+
+    - name: Show K3s installation output
+      debug:
+        var: k3s_install_result
       when: not k3s_installed.stat.exists
 
     - name: Wait for K3s to be ready

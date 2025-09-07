@@ -1,7 +1,10 @@
 ---
-- name: Deploy SMS Bridge Infrastructure with Vault (Docker Only)
+- name: Deploy SMS Bridge Infrastructure with Vault (community.docker only)
   hosts: localhost
   become: no  # No sudo needed for Docker operations
+  
+  collections:
+    - community.docker
 
   vars_files:
     - vault.yml  # Encrypted vault file
@@ -18,6 +21,7 @@
     python_receiver_image: "sms_receiver_image"
     redis_password: "{{ redis_password }}"  # Reference from vault
     hash_secret_key: "{{ hash_secret_key }}"  # Reference from vault
+    project_dir: "{{ ansible_env.HOME }}/sms_bridge"
 
   tasks:
     - name: Debug distribution info
@@ -85,24 +89,33 @@
 
     - name: Create project directory
       file:
-        path: ~/sms_bridge
+        path: "{{ project_dir }}"
         state: directory
 
     - name: Create logs directory for persistent logging
       file:
-        path: ~/sms_bridge/logs
+        path: "{{ project_dir }}/logs"
         state: directory
         mode: '0755'
 
     - name: Create SMS receiver logs subdirectory
       file:
-        path: ~/sms_bridge/logs/sms_receiver
+        path: "{{ project_dir }}/logs/sms_receiver"
         state: directory
         mode: '0755'
 
+    - name: Create Grafana provisioning directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ project_dir }}/grafana/provisioning/datasources"
+        - "{{ project_dir }}/grafana/provisioning/dashboards"
+
     - name: Copy PostgreSQL initialization script with new schema
       copy:
-        dest: ~/sms_bridge/init.sql
+        dest: "{{ project_dir }}/init.sql"
         content: |
           -- Just load the schema, no user creation needed
           -- The 'postgres' user is already the superuser with full privileges
@@ -111,11 +124,11 @@
     - name: Copy database schema file
       copy:
         src: ./schema.sql
-        dest: ~/sms_bridge/schema.sql
+        dest: "{{ project_dir }}/schema.sql"
 
     - name: Copy Dockerfile for Python SMS receiver
       copy:
-        dest: ~/sms_bridge/Dockerfile
+        dest: "{{ project_dir }}/Dockerfile"
         content: |
           FROM python:3.11-slim
           WORKDIR /app
@@ -128,42 +141,33 @@
     - name: Copy Python SMS server script
       copy:
         src: ./sms_server.py
-        dest: ~/sms_gateway/sms_server.py
+        dest: "{{ project_dir }}/sms_server.py"
 
     - name: Copy validation check files
       copy:
         src: ./checks/
-        dest: ~/sms_gateway/checks/
+        dest: "{{ project_dir }}/checks/"
 
     - name: Create Prometheus configuration
       copy:
-        dest: ~/sms_gateway/prometheus.yml
+        dest: "{{ project_dir }}/prometheus.yml"
         content: |
           global:
             scrape_interval: 15s
           scrape_configs:
             - job_name: 'postgres_exporter'
               static_configs:
-                - targets: ['localhost:9187']
+                - targets: ['postgres_exporter:9187']
             - job_name: 'redis_exporter'
               static_configs:
-                - targets: ['localhost:9121']
+                - targets: ['redis_exporter:9121']
             - job_name: 'sms_server'
               static_configs:
-                - targets: ['localhost:8080']
-
-    - name: Create Grafana provisioning directory structure
-      file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0755'
-      loop:
-        - ~/sms_gateway/grafana/provisioning/datasources
-        - ~/sms_gateway/grafana/provisioning/dashboards
+                - targets: ['sms_receiver:8080']
 
     - name: Create Grafana datasource configuration
       copy:
-        dest: ~/sms_gateway/grafana/provisioning/datasources/prometheus.yml
+        dest: "{{ project_dir }}/grafana/provisioning/datasources/prometheus.yml"
         content: |
           apiVersion: 1
           datasources:
@@ -175,7 +179,7 @@
 
     - name: Create Grafana dashboard configuration
       copy:
-        dest: ~/sms_gateway/grafana/provisioning/dashboards/dashboards.yml
+        dest: "{{ project_dir }}/grafana/provisioning/dashboards/dashboards.yml"
         content: |
           apiVersion: 1
           providers:
@@ -191,7 +195,7 @@
 
     - name: Create PostgreSQL monitoring dashboard
       copy:
-        dest: ~/sms_gateway/grafana/provisioning/dashboards/postgres-dashboard.json
+        dest: "{{ project_dir }}/grafana/provisioning/dashboards/postgres-dashboard.json"
         content: |
           {
             "dashboard": {
@@ -207,7 +211,7 @@
                   "type": "graph",
                   "targets": [
                     {
-                      "expr": "pg_stat_database_numbackends{datname=\"sms_gateway\"}",
+                      "expr": "pg_stat_database_numbackends{datname=\"sms_bridge\"}",
                       "legendFormat": "Active Connections"
                     }
                   ],
@@ -235,7 +239,7 @@
                   "type": "graph",
                   "targets": [
                     {
-                      "expr": "pg_database_size_bytes{datname=\"sms_gateway\"}",
+                      "expr": "pg_database_size_bytes{datname=\"sms_bridge\"}",
                       "legendFormat": "Database Size"
                     }
                   ],
@@ -266,135 +270,234 @@
             }
           }
 
-    - name: Create docker-compose.yml with vaulted secrets
-      copy:
-        dest: ~/sms_gateway/docker-compose.yml
-        content: |
-          version: '3.8'
-          services:
-            postgres:
-              image: postgres:15
-              environment:
-                POSTGRES_PASSWORD: "{{ pg_password }}"
-                POSTGRES_DB: "{{ pg_db }}"
-                # Use default 'postgres' superuser
-              volumes:
-                - pg_data:/var/lib/postgresql/data
-                - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-                - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
-              ports:
-                - "{{ pg_port }}:5432"
+    # Create Docker network for container communication
+    - name: Create SMS bridge Docker network
+      community.docker.docker_network:
+        name: sms_bridge_network
+        state: present
 
-            pgbouncer:
-              image: brainsam/pgbouncer
-              environment:
-                DB_HOST: postgres
-                DB_PORT: 5432
-                DB_USER: "{{ pg_user }}"
-                DB_PASSWORD: "{{ pg_password }}"
-                DB_NAME: "{{ pg_db }}"
-                POOL_MODE: transaction
-                MAX_CLIENT_CONN: 1000
-                DEFAULT_POOL_SIZE: 10
-              ports:
-                - "{{ pgbouncer_port }}:6432"
-              depends_on:
-                - postgres
+    # Create Docker volume for PostgreSQL data
+    - name: Create PostgreSQL data volume
+      community.docker.docker_volume:
+        name: pg_data
+        state: present
 
-            redis:
-              image: redis:7-alpine
-              command: ["redis-server", "--maxmemory", "256mb", "--maxclients", "1000", "--requirepass", "{{ redis_password }}"]
-              ports:
-                - "{{ redis_port }}:6379"
+    # Start PostgreSQL container
+    - name: Start PostgreSQL container
+      community.docker.docker_container:
+        name: postgres
+        image: postgres:15
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - postgres
+        ports:
+          - "{{ pg_port }}:5432"
+        volumes:
+          - pg_data:/var/lib/postgresql/data
+          - "{{ project_dir }}/init.sql:/docker-entrypoint-initdb.d/init.sql:ro"
+          - "{{ project_dir }}/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro"
+        env:
+          POSTGRES_PASSWORD: "{{ pg_password }}"
+          POSTGRES_DB: "{{ pg_db }}"
 
-            prometheus:
-              image: prom/prometheus:latest
-              volumes:
-                - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-              ports:
-                - "{{ prometheus_port }}:9090"
+    # Start Redis container
+    - name: Start Redis container
+      community.docker.docker_container:
+        name: redis
+        image: redis:7-alpine
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - redis
+        ports:
+          - "{{ redis_port }}:6379"
+        command: ["redis-server", "--maxmemory", "256mb", "--maxclients", "1000", "--requirepass", "{{ redis_password }}"]
 
-            grafana:
-              image: grafana/grafana:latest
-              environment:
-                - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
-              volumes:
-                - ./grafana/provisioning:/etc/grafana/provisioning:ro
-              ports:
-                - "{{ grafana_port }}:3000"
-              depends_on:
-                - prometheus
+    # Start PgBouncer container
+    - name: Start PgBouncer container
+      community.docker.docker_container:
+        name: pgbouncer
+        image: brainsam/pgbouncer
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - pgbouncer
+        ports:
+          - "{{ pgbouncer_port }}:6432"
+        env:
+          DB_HOST: postgres
+          DB_PORT: 5432
+          DB_USER: "{{ pg_user }}"
+          DB_PASSWORD: "{{ pg_password }}"
+          DB_NAME: "{{ pg_db }}"
+          POOL_MODE: transaction
+          MAX_CLIENT_CONN: 1000
+          DEFAULT_POOL_SIZE: 10
 
-            postgres_exporter:
-              image: prometheuscommunity/postgres-exporter
-              environment:
-                DATA_SOURCE_NAME: "postgresql://{{ pg_user }}:{{ pg_password }}@postgres:5432/{{ pg_db }}?sslmode=disable"
-              depends_on:
-                - postgres
-              ports:
-                - "9187:9187"
+    # Start Prometheus container
+    - name: Start Prometheus container
+      community.docker.docker_container:
+        name: prometheus
+        image: prom/prometheus:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - prometheus
+        ports:
+          - "{{ prometheus_port }}:9090"
+        volumes:
+          - "{{ project_dir }}/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
 
-            redis_exporter:
-              image: oliver006/redis_exporter
-              command: ["-redis.addr=redis://:{{ redis_password }}@redis:6379"]
-              depends_on:
-                - redis
-              ports:
-                - "9121:9121"
+    # Start Grafana container
+    - name: Start Grafana container
+      community.docker.docker_container:
+        name: grafana
+        image: grafana/grafana:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - grafana
+        ports:
+          - "{{ grafana_port }}:3000"
+        volumes:
+          - "{{ project_dir }}/grafana/provisioning:/etc/grafana/provisioning:ro"
+        env:
+          GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
 
-            sms_receiver:
-              build: .
-              ports:
-                - "{{ python_receiver_port }}:8080"
-              volumes:
-                - ./logs:/app/logs:rw  # Mount logs directory for persistent logging
-                - ./logs/sms_receiver:/var/log/sms_receiver:rw  # Additional log location
-              environment:
-                - CF_API_KEY={{ cf_api_key }}
-                - CF_BACKEND_URL={{ cf_backend_url }}
-                - POSTGRES_HOST=pgbouncer
-                - POSTGRES_DB={{ pg_db }}
-                - POSTGRES_USER={{ pg_user }}
-                - POSTGRES_PASSWORD={{ pg_password }}
-                - POSTGRES_PORT={{ pgbouncer_port }}
-                - REDIS_HOST=redis
-                - REDIS_PORT=6379
-                - REDIS_PASSWORD={{ redis_password }}
-                - HASH_SECRET_KEY={{ hash_secret_key }}  # Added for hash validation
-                - LOG_LEVEL=INFO  # Set log level via environment
-                - LOG_DIR=/app/logs  # Log directory inside container
-              depends_on:
-                - postgres
-                - pgbouncer
-                - redis
+    # Start PostgreSQL exporter container
+    - name: Start PostgreSQL exporter container
+      community.docker.docker_container:
+        name: postgres_exporter
+        image: prometheuscommunity/postgres-exporter
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - postgres_exporter
+        ports:
+          - "9187:9187"
+        env:
+          DATA_SOURCE_NAME: "postgresql://{{ pg_user }}:{{ pg_password }}@postgres:5432/{{ pg_db }}?sslmode=disable"
 
-          volumes:
-            pg_data:
+    # Start Redis exporter container
+    - name: Start Redis exporter container
+      community.docker.docker_container:
+        name: redis_exporter
+        image: oliver006/redis_exporter
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - redis_exporter
+        ports:
+          - "9121:9121"
+        command: ["-redis.addr=redis://:{{ redis_password }}@redis:6379"]
 
+    # Build Python SMS receiver Docker image
     - name: Build Python SMS receiver Docker image
-      shell: docker-compose -f ~/sms_gateway/docker-compose.yml build sms_receiver
-      become: no
+      community.docker.docker_image:
+        name: "{{ python_receiver_image }}"
+        build:
+          path: "{{ project_dir }}"
+          dockerfile: Dockerfile
+        source: build
+        state: present
+        force_source: yes
 
-    - name: Start all containers
-      shell: docker-compose -f ~/sms_gateway/docker-compose.yml up -d
-      become: no
+    # Start SMS receiver container
+    - name: Start SMS receiver container
+      community.docker.docker_container:
+        name: sms_receiver
+        image: "{{ python_receiver_image }}"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: sms_bridge_network
+            aliases:
+              - sms_receiver
+        ports:
+          - "{{ python_receiver_port }}:8080"
+        volumes:
+          - "{{ project_dir }}/logs:/app/logs:rw"
+          - "{{ project_dir }}/logs/sms_receiver:/var/log/sms_receiver:rw"
+        env:
+          CF_API_KEY: "{{ cf_api_key }}"
+          CF_BACKEND_URL: "{{ cf_backend_url }}"
+          POSTGRES_HOST: pgbouncer
+          POSTGRES_DB: "{{ pg_db }}"
+          POSTGRES_USER: "{{ pg_user }}"
+          POSTGRES_PASSWORD: "{{ pg_password }}"
+          POSTGRES_PORT: "{{ pgbouncer_port }}"
+          REDIS_HOST: redis
+          REDIS_PORT: 6379
+          REDIS_PASSWORD: "{{ redis_password }}"
+          HASH_SECRET_KEY: "{{ hash_secret_key }}"
+          LOG_LEVEL: INFO
+          LOG_DIR: /app/logs
 
-    - name: Show container status with verbose output
+    # Wait for containers to be healthy
+    - name: Wait for PostgreSQL to be ready
+      community.docker.docker_container_info:
+        name: postgres
+      register: postgres_info
+      until: postgres_info.container.State.Status == "running"
+      retries: 30
+      delay: 2
+
+    - name: Wait for Redis to be ready
+      community.docker.docker_container_info:
+        name: redis
+      register: redis_info
+      until: redis_info.container.State.Status == "running"
+      retries: 30
+      delay: 2
+
+    - name: Show container status
+      community.docker.docker_container_info:
+        name: "{{ item }}"
+      register: container_info
+      loop:
+        - postgres
+        - redis
+        - pgbouncer
+        - prometheus
+        - grafana
+        - postgres_exporter
+        - redis_exporter
+        - sms_receiver
+
+    - name: Display container status
+      debug:
+        msg: "Container {{ item.item }} is {{ item.container.State.Status }}"
+      loop: "{{ container_info.results }}"
+      when: item.container is defined
+
+    - name: Show container logs for debugging
       shell: |
         echo "=== Container Status ==="
-        docker-compose -f ~/sms_gateway/docker-compose.yml ps -a
+        docker ps -a --filter "network=sms_bridge_network"
         echo ""
         echo "=== Redis Container Logs ==="
-        docker-compose -f ~/sms_gateway/docker-compose.yml logs redis
+        docker logs redis --tail 20
         echo ""
         echo "=== SMS Receiver Container Logs ==="
-        docker-compose -f ~/sms_gateway/docker-compose.yml logs sms_receiver
-        echo ""
-        echo "=== Redis Exporter Container Logs ==="
-        docker-compose -f ~/sms_gateway/docker-compose.yml logs redis_exporter
+        docker logs sms_receiver --tail 20
         echo ""
         echo "=== PostgreSQL Container Logs ==="
-        docker-compose -f ~/sms_gateway/docker-compose.yml logs pg
+        docker logs postgres --tail 20
       register: container_debug
       ignore_errors: yes
 

@@ -140,7 +140,15 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
                 results[f'{check_name}_check'] = 3  # skipped
                 continue
             
-            check_func = globals()[f'validate_{check_name}_check']
+            # Use explicit function mapping instead of globals() to prevent code injection
+            if check_name not in VALIDATION_FUNCTIONS:
+                logger.error(f"Unknown validation check: {check_name}")
+                results[f'{check_name}_check'] = 2  # fail
+                overall_status = 'invalid'
+                failed_check = check_name
+                break
+            
+            check_func = VALIDATION_FUNCTIONS[check_name]
             result = await check_func(sms, pool)
             results[f'{check_name}_check'] = result
             
@@ -248,3 +256,13 @@ from checks.header_check import validate_header_check
 from checks.hash_length_check import validate_hash_length_check
 from checks.mobile_check import validate_mobile_check
 from checks.time_window_check import validate_time_window_check
+
+# Explicit function mapping dictionary to prevent code injection
+VALIDATION_FUNCTIONS = {
+    'blacklist': validate_blacklist_check,
+    'duplicate': validate_duplicate_check,
+    'header': validate_header_check,
+    'hash_length': validate_hash_length_check,
+    'mobile': validate_mobile_check,
+    'time_window': validate_time_window_check
+}

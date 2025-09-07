@@ -4,7 +4,8 @@ This folder contains Ansible playbooks for deploying the SMS Bridge infrastructu
 
 ## Files
 
-- `setup_sms_bridge_k3s.yml` - Main K3s deployment playbook
+- `install_k3s.yml` - **One-time K3s installation** (requires sudo)
+- `setup_sms_bridge_k3s.yml` - Main SMS Bridge deployment (vault password only)
 - `restart_sms_bridge_k3s.yml` - Restart all K3s services
 - `stop_sms_bridge_k3s.yml` - Stop all K3s services (deletes namespace)
 - `uninstall_k3s.yml` - Completely remove K3s and cleanup
@@ -25,30 +26,56 @@ The playbooks reference these shared files from the parent directory:
    ansible-galaxy collection install kubernetes.core community.general
    ```
 
-2. **Python Dependencies**: Install Kubernetes Python client
+2. **Container Build Tool**: Install either Docker or Buildah for building images
    ```bash
-   pip install kubernetes pyyaml
+   # Option 1: Docker
+   sudo apt install docker.io
+   sudo usermod -aG docker $USER  # Re-login after this
+   
+   # Option 2: Buildah (alternative to Docker)
+   sudo apt install buildah
    ```
 
 3. **Vault File**: Ensure `../vault.yml` contains required secrets
 
-## Quick Start
+## Deployment Process
 
-### Deploy SMS Bridge with K3s
+### Step 1: Install K3s (One-time setup - requires sudo)
 ```bash
+# Run from the ansible-k3s directory
 cd ansible-k3s
-ansible-playbook -i inventory.txt setup_sms_bridge_k3s.yml --ask-vault-pass
+ansible-playbook -i inventory.txt install_k3s.yml
 ```
+
+This will:
+- Install K3s Kubernetes distribution
+- Set up kubectl alias and environment
+- Install Python Kubernetes libraries
+- **Requires sudo privileges**
+
+### Step 2: Deploy SMS Bridge (vault password only)
+```bash
+# Run from the PROJECT ROOT directory (not ansible-k3s)
+cd ..  # Go back to project root if you're in ansible-k3s
+ansible-playbook -i ansible-k3s/inventory.txt ansible-k3s/setup_sms_bridge_k3s.yml --ask-vault-pass
+```
+
+This will:
+- Build the SMS receiver container image
+- Deploy all services to K3s
+- **Only requires vault password** (no sudo needed)
 
 ### Manage the Deployment
 ```bash
+# Run these commands from the PROJECT ROOT directory
 # Restart all services
-ansible-playbook -i inventory.txt restart_sms_bridge_k3s.yml
+ansible-playbook -i ansible-k3s/inventory.txt ansible-k3s/restart_sms_bridge_k3s.yml
 
 # Stop all services (keeps K3s running)
-ansible-playbook -i inventory.txt stop_sms_bridge_k3s.yml
+ansible-playbook -i ansible-k3s/inventory.txt ansible-k3s/stop_sms_bridge_k3s.yml
 
-# Completely remove K3s
+# Completely remove K3s (run from ansible-k3s directory)
+cd ansible-k3s
 ansible-playbook -i inventory.txt uninstall_k3s.yml
 ```
 

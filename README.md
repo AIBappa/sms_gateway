@@ -48,6 +48,24 @@ cd ansible-k3s
 ansible-playbook -i inventory.txt setup_sms_bridge_k3s.yml --ask-vault-pass
 ```
 
+## Deployment Options
+
+This project offers two deployment methods with separate folder organization:
+
+### 📦 Docker Deployment (`ansible-docker/`)
+- **Traditional approach** using community.docker collection
+- **Single command deployment** with vault password
+- **Lightweight** and familiar for Docker users
+- Uses individual containers with custom networks
+
+### ☸️ K3s Deployment (`ansible-k3s/`)  
+- **Kubernetes approach** using lightweight K3s
+- **Two-step deployment**: K3s install (sudo) + deployment (vault only)
+- **Production-ready** with proper orchestration
+- Uses Kubernetes manifests with deployments and services
+
+Both methods deploy identical infrastructure with the same services and capabilities.
+
 ## Prerequisites
 
 ### Common Requirements
@@ -55,13 +73,33 @@ ansible-playbook -i inventory.txt setup_sms_bridge_k3s.yml --ask-vault-pass
 - Ansible installed
 - Git (for cloning)
 
-### Docker Deployment
+### For Docker Deployment
 - Docker and Docker Compose
 - `community.docker` Ansible collection
 
-### K3s Deployment  
+### For K3s Deployment  
 - `kubernetes.core` and `community.general` Ansible collections
 - Python kubernetes library
+- Docker or Buildah (for building container images)
+
+## Quick Start
+
+### Option 1: Docker Deployment
+```bash
+cd ansible-docker
+ansible-playbook -i inventory.txt setup_sms_bridge.yml --ask-vault-pass
+```
+
+### Option 2: K3s Deployment
+```bash
+# Step 1: Install K3s (one-time, requires sudo)
+cd ansible-k3s
+ansible-playbook -i inventory.txt install_k3s.yml
+
+# Step 2: Deploy SMS Bridge (vault password only, run from project root)
+cd ..  # Back to project root
+ansible-playbook -i ansible-k3s/inventory.txt ansible-k3s/setup_sms_bridge_k3s.yml --ask-vault-pass
+```
 
 ## Setup Steps
 
@@ -73,7 +111,7 @@ ansible-playbook -i inventory.txt setup_sms_bridge_k3s.yml --ask-vault-pass
 
 2. **Choose Deployment Method**: Navigate to either `ansible-docker/` or `ansible-k3s/`
 
-3. **Run Setup**: Follow the README in your chosen deployment folder
+3. **Follow Method-Specific README**: Each folder has detailed instructions
 
 4. **Verify**: Check that services are running and accessible
 

@@ -1,7 +1,7 @@
 ---
 - name: Deploy SMS Bridge Infrastructure with K3s
   hosts: localhost
-  become: yes  # Need sudo for K3s installation and system operations
+  become: no  # No sudo needed for deployment, only vault password required
   
   collections:
     - kubernetes.core
@@ -22,14 +22,25 @@
     python_receiver_image: "sms_receiver_image"
     redis_password: "{{ redis_password }}"
     hash_secret_key: "{{ hash_secret_key }}"
-    project_dir: "{{ ansible_env.HOME }}/sms_bridge"
-    k3s_version: "v1.28.8+k3s1"
+    project_dir: "/home/{{ ansible_user_id }}/sms_bridge"
     namespace: "sms-bridge"
 
   tasks:
-    - name: Debug distribution info
-      debug:
-        msg: "Distribution: {{ ansible_distribution }}, OS Family: {{ ansible_os_family }}"
+    - name: Verify K3s is installed and running
+      uri:
+        url: "https://localhost:6443/api/v1"
+        method: GET
+        validate_certs: no
+        status_code: [200, 401, 403]  # 401/403 are OK, just means we need auth
+      register: k3s_check
+      failed_when: false
+
+    - name: Fail if K3s is not running
+      fail:
+        msg: |
+          K3s is not running or not installed. Please run the K3s installation first:
+          ansible-playbook install_k3s.yml
+      when: k3s_check.status == -1 or k3s_check.status|default(0) == 0
 
     - name: Create project directory
       file:
@@ -37,7 +48,6 @@
         state: directory
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create K3s manifests directory
       file:
@@ -45,7 +55,6 @@
         state: directory
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create logs directory for persistent logging
       file:
@@ -54,7 +63,6 @@
         mode: '0755'
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create SMS receiver logs subdirectory
       file:
@@ -63,7 +71,6 @@
         mode: '0755'
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Grafana provisioning directory structure
       file:
@@ -75,41 +82,6 @@
       loop:
         - "{{ project_dir }}/grafana/provisioning/datasources"
         - "{{ project_dir }}/grafana/provisioning/dashboards"
-      become: no
-
-    # Install K3s
-    - name: Download K3s installation script
-      get_url:
-        url: https://get.k3s.io
-        dest: /tmp/k3s-install.sh
-        mode: '0755'
-
-    - name: Install K3s
-      shell: |
-        INSTALL_K3S_VERSION={{ k3s_version }} /tmp/k3s-install.sh --write-kubeconfig-mode 644
-      args:
-        creates: /usr/local/bin/k3s
-
-    - name: Wait for K3s to be ready
-      wait_for:
-        port: 6443
-        host: localhost
-        delay: 10
-        timeout: 300
-
-    - name: Add kubectl alias for k3s
-      lineinfile:
-        path: "{{ ansible_env.HOME }}/.bashrc"
-        line: "alias kubectl='k3s kubectl'"
-        create: yes
-      become: no
-
-    - name: Set KUBECONFIG environment variable
-      lineinfile:
-        path: "{{ ansible_env.HOME }}/.bashrc"
-        line: "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
-        create: yes
-      become: no
 
     # Copy application files
     - name: Copy PostgreSQL initialization script
@@ -121,7 +93,6 @@
           \i /docker-entrypoint-initdb.d/schema.sql;
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Copy database schema file
       copy:
@@ -129,7 +100,6 @@
         dest: "{{ project_dir }}/schema.sql"
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Copy Python SMS server script
       copy:
@@ -137,7 +107,6 @@
         dest: "{{ project_dir }}/sms_server.py"
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Copy validation check files
       copy:
@@ -145,7 +114,6 @@
         dest: "{{ project_dir }}/checks/"
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Dockerfile for SMS receiver
       copy:
@@ -160,17 +128,48 @@
           CMD ["uvicorn", "sms_server:app", "--host", "0.0.0.0", "--port", "8080"]
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
-    # Build container image using K3s containerd
-    - name: Build SMS receiver image with K3s containerd
+    # Build container image 
+    - name: Check if buildah is available
+      command: which buildah
+      register: buildah_available
+      failed_when: false
+
+    - name: Check if docker is available  
+      command: which docker
+      register: docker_available
+      failed_when: false
+
+    - name: Fail if no container build tool is available
+      fail:
+        msg: |
+          Neither Docker nor Buildah is available for building container images.
+          Please install either Docker or Buildah:
+          - Docker: sudo apt install docker.io
+          - Buildah: sudo apt install buildah
+      when: docker_available.rc != 0 and buildah_available.rc != 0
+
+    - name: Build SMS receiver image with Docker
       shell: |
         cd {{ project_dir }}
-        k3s ctr images import --label io.cri-containerd.image=managed <(docker build -t {{ python_receiver_image }}:latest . -q --output type=docker | k3s ctr images import -)
+        docker build -t {{ python_receiver_image }}:latest .
+        # Save and import into K3s
+        docker save {{ python_receiver_image }}:latest | sudo k3s ctr images import -
       args:
         creates: "{{ project_dir }}/.image_built"
-      environment:
-        PATH: "/usr/local/bin:{{ ansible_env.PATH }}"
+      when: docker_available.rc == 0
+
+    - name: Build SMS receiver image with Buildah
+      shell: |
+        cd {{ project_dir }}
+        buildah build -t {{ python_receiver_image }}:latest .
+        # Push to K3s containerd
+        buildah push {{ python_receiver_image }}:latest containers-storage:{{ python_receiver_image }}:latest
+        buildah push {{ python_receiver_image }}:latest oci-archive:/tmp/{{ python_receiver_image }}.tar
+        sudo k3s ctr images import /tmp/{{ python_receiver_image }}.tar
+      args:
+        creates: "{{ project_dir }}/.image_built"
+      when: docker_available.rc != 0 and buildah_available.rc == 0
 
     - name: Mark image as built
       file:
@@ -178,7 +177,6 @@
         state: touch
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     # Create Kubernetes manifests
     - name: Create namespace manifest
@@ -191,7 +189,6 @@
             name: {{ namespace }}
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create ConfigMap for database initialization
       copy:
@@ -211,7 +208,6 @@
               {{ lookup('file', '../schema.sql') | indent(6) }}
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Secret for sensitive data
       copy:
@@ -231,7 +227,6 @@
             grafana-admin-password: {{ grafana_admin_password | b64encode }}
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create PostgreSQL PersistentVolume
       copy:
@@ -265,7 +260,6 @@
             storageClassName: local-path
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create PostgreSQL deployment
       copy:
@@ -333,7 +327,6 @@
             type: ClusterIP
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Redis deployment
       copy:
@@ -395,7 +388,6 @@
             type: ClusterIP
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create PgBouncer deployment
       copy:
@@ -463,7 +455,6 @@
             type: ClusterIP
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Prometheus ConfigMap
       copy:
@@ -490,7 +481,6 @@
                     - targets: ['sms-receiver:8080']
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Prometheus deployment
       copy:
@@ -546,7 +536,6 @@
             type: NodePort
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Grafana ConfigMap
       copy:
@@ -667,7 +656,6 @@
               }
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Grafana deployment
       copy:
@@ -740,7 +728,6 @@
             type: NodePort
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create PostgreSQL exporter deployment
       copy:
@@ -796,7 +783,6 @@
             type: ClusterIP
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create Redis exporter deployment
       copy:
@@ -852,7 +838,6 @@
             type: ClusterIP
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     - name: Create SMS receiver deployment
       copy:
@@ -955,7 +940,6 @@
             type: NodePort
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
-      become: no
 
     # Apply all Kubernetes manifests
     - name: Apply namespace

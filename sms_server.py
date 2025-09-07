@@ -1,36 +1,46 @@
 import os
 import json
-import datetime
-import psycopg2
+import asyncio
+import logging
+from datetime import datetime, timezone
+from typing import List, Dict
+import asyncpg
 import redis
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel
 import requests
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
+# Pydantic models
+class SMSInput(BaseModel):
+    sender_number: str
+    sms_message: str
+    received_timestamp: datetime
+
+class BatchSMSData(BaseModel):
+    uuid: str
+    sender_number: str
+    sms_message: str
+    received_timestamp: datetime
+
+# Load configuration
 CONFIG_FILE = os.path.expanduser('~/sms_gateway_config.json')
-
 try:
     with open(CONFIG_FILE, 'r') as f:
         config = json.load(f)
-    LOG_FILE = config.get('log_file', 'sms_log.txt')
-except FileNotFoundError:
+except (FileNotFoundError, json.JSONDecodeError):
     config = {}
-    LOG_FILE = 'sms_log.txt'
-except json.JSONDecodeError:
-    config = {}
-    LOG_FILE = 'sms_log.txt'
 
-# Load secrets from environment with fallback to config.json
 CF_BACKEND_URL = os.getenv('CF_BACKEND_URL', config.get('cf_endpoint', 'https://default-url-if-not-set'))
 API_KEY = os.getenv('CF_API_KEY', config.get('cf_api_key', ''))
-if not API_KEY:
-    print("Warning: API key not set.")
+
+HASH_SECRET_KEY = os.getenv('HASH_SECRET_KEY', '')  # Added for hash validation
 
 POSTGRES_CONFIG = {
     'host': os.getenv('POSTGRES_HOST', 'localhost'),
     'database': os.getenv('POSTGRES_DB', 'sms_gateway'),
     'user': os.getenv('POSTGRES_USER', 'sms_user'),
     'password': os.getenv('POSTGRES_PASSWORD', ''),
-    'port': int(os.getenv('POSTGRES_PORT', 5432)),
+    'port': int(os.getenv('POSTGRES_PORT', 6432)),  # pgbouncer port
 }
 
 REDIS_CONFIG = {
@@ -40,88 +50,201 @@ REDIS_CONFIG = {
     'db': 0,
 }
 
-pg_conn = psycopg2.connect(**POSTGRES_CONFIG)
-pg_conn.autocommit = True
+app = FastAPI()
+redis_client = redis.StrictRedis(**REDIS_CONFIG)
+pool = None
 
-redis_client = redis.StrictRedis(
-    host=REDIS_CONFIG['host'],
-    port=REDIS_CONFIG['port'],
-    password=REDIS_CONFIG['password'],
-    db=REDIS_CONFIG['db'],
+# Logging setup with file handlers for persistent logging
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+LOG_DIR = os.getenv('LOG_DIR', '/app/logs')
+
+# Ensure log directory exists
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Configure logging with both file and console handlers
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()  # Console output for Docker logs
+    ]
 )
 
-class SMSHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        sms_raw = self.rfile.read(content_length).decode('utf-8')
+# Add rotating file handlers for persistent logging
+from logging.handlers import RotatingFileHandler
 
-        with open(LOG_FILE, 'a', encoding='utf-8') as f:
-            f.write(f"[{datetime.datetime.now()}] {sms_raw}\n")
+# Create rotating file handler for general logs
+rotating_handler = RotatingFileHandler(
+    f'{LOG_DIR}/sms_server.log',
+    maxBytes=50*1024*1024,  # 50MB
+    backupCount=5
+)
+rotating_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
+# Create rotating file handler for errors
+error_handler = RotatingFileHandler(
+    f'{LOG_DIR}/sms_server_errors.log',
+    maxBytes=50*1024*1024,  # 50MB
+    backupCount=5
+)
+error_handler.setLevel(logging.ERROR)
+error_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Add handlers to root logger
+logging.getLogger().addHandler(rotating_handler)
+logging.getLogger().addHandler(error_handler)
+
+logger = logging.getLogger(__name__)
+logger.info(f"SMS Server starting with log level: {LOG_LEVEL}")
+logger.info(f"Logs will be written to: {LOG_DIR}")
+
+async def get_db_pool():
+    global pool
+    if pool is None:
+        # Disable statement cache for PgBouncer compatibility
+        pool = await asyncpg.create_pool(**POSTGRES_CONFIG, min_size=1, max_size=10, statement_cache_size=0)
+    return pool
+
+async def get_setting(key: str):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        result = await conn.fetchval("SELECT setting_value FROM system_settings WHERE setting_key = $1", key)
+        if result is None:
+            return None
+        # Try to parse as JSON, if it fails return as string
         try:
-            if sms_raw.strip().startswith('{'):
-                sms_data = json.loads(sms_raw)
-            else:
-                sender, message = (sms_raw.split(':', 1) + [""])[:2]
-                sms_data = {
-                    'sender': sender.strip() or "Unknown",
-                    'message': message.strip(),
-                    'timestamp': datetime.datetime.now().isoformat(),
-                }
-        except Exception as e:
-            print(f"[Error] Parsing SMS failed: {e}")
-            self.send_response(400)
-            self.end_headers()
-            return
+            return json.loads(result)
+        except (json.JSONDecodeError, TypeError):
+            return result
 
-        sender = sms_data['sender']
-        cursor = pg_conn.cursor()
+async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
+    check_sequence = await get_setting('check_sequence')
+    check_enabled = await get_setting('check_enabled')
+    pool = await get_db_pool()
+    
+    for sms in batch_sms_data:
+        # Initialize all check results to 0 (not run)
+        results = {
+            'blacklist_check': 0,
+            'duplicate_check': 0,
+            'header_check': 0,
+            'hash_length_check': 0,
+            'mobile_check': 0,
+            'time_window_check': 0
+        }
+        overall_status = 'valid'
+        failed_check = None
+        
+        for check_name in check_sequence:
+            if not check_enabled.get(check_name, False):
+                results[f'{check_name}_check'] = 3  # skipped
+                continue
+            
+            check_func = globals()[f'validate_{check_name}_check']
+            result = await check_func(sms, pool)
+            results[f'{check_name}_check'] = result
+            
+            if result == 2:  # fail
+                overall_status = 'invalid'
+                failed_check = check_name
+                break
+            elif result == 3:  # skipped
+                continue
+        
+        # Update sms_monitor
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO sms_monitor (uuid, overall_status, failed_at_check, processing_completed_at, 
+                                         blacklist_check, duplicate_check, header_check, hash_length_check, 
+                                         mobile_check, time_window_check)
+                VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (uuid) DO UPDATE SET 
+                    overall_status = EXCLUDED.overall_status,
+                    failed_at_check = EXCLUDED.failed_at_check,
+                    processing_completed_at = EXCLUDED.processing_completed_at,
+                    blacklist_check = EXCLUDED.blacklist_check,
+                    duplicate_check = EXCLUDED.duplicate_check,
+                    header_check = EXCLUDED.header_check,
+                    hash_length_check = EXCLUDED.hash_length_check,
+                    mobile_check = EXCLUDED.mobile_check,
+                    time_window_check = EXCLUDED.time_window_check
+            """, sms.uuid, overall_status, failed_check, *results.values())
+        
+        if overall_status == 'valid':
+            # Insert to out_sms and Redis
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO out_sms (uuid, sender_number, sms_message) VALUES ($1, $2, $3)
+                """, sms.uuid, sms.sender_number, sms.sms_message)
+            redis_client.sadd('out_sms_numbers', sms.sender_number)
 
+async def batch_processor():
+    while True:
+        pool = await get_db_pool()
+        batch_size = int(await get_setting('batch_size'))
+        last_uuid = await get_setting('last_processed_uuid')
+        
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT uuid, sender_number, sms_message, received_timestamp 
+                FROM input_sms 
+                WHERE uuid > $1 
+                ORDER BY uuid 
+                LIMIT $2
+            """, last_uuid, batch_size)
+        
+        if rows:
+            batch_data = [BatchSMSData(**dict(row)) for row in rows]
+            await run_validation_checks(batch_data)
+            
+            # Update last_processed_uuid
+            new_last_uuid = rows[-1]['uuid']
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE system_settings SET setting_value = $1 WHERE setting_key = 'last_processed_uuid'
+                """, str(new_last_uuid))
+        
+        await asyncio.sleep(1)  # Adjust as needed
+
+@app.on_event("startup")
+async def startup_event():
+    # Cache warmup
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        numbers = await conn.fetch("SELECT sender_number FROM out_sms")
+        for row in numbers:
+            redis_client.sadd('out_sms_numbers', row['sender_number'])
+    
+    # Start batch processor
+    asyncio.create_task(batch_processor())
+
+@app.post("/sms/receive")
+async def receive_sms(sms_data: SMSInput, background_tasks: BackgroundTasks):
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO input_sms (sender_number, sms_message, received_timestamp) 
+            VALUES ($1, $2, $3)
+        """, sms_data.sender_number, sms_data.sms_message, sms_data.received_timestamp)
+    
+    # Optionally forward to CF backend
+    if CF_BACKEND_URL and API_KEY:
         try:
-            sender_exists = redis_client.exists(sender)
-            if not sender_exists:
-                cursor.execute("SELECT 1 FROM sms_senders WHERE sender = %s LIMIT 1;", (sender,))
-                if cursor.fetchone() is None:
-                    cursor.execute("INSERT INTO sms_senders (sender) VALUES (%s);", (sender,))
-                redis_client.set(sender, 1)
-
-            forwarded = not sender_exists
-
-            cursor.execute("""
-                INSERT INTO sms_messages (sender, message, forwarded)
-                VALUES (%s, %s, %s);
-            """, (sender, sms_data.get('message', ''), forwarded))
+            response = requests.post(CF_BACKEND_URL, json=sms_data.dict(), headers={'Authorization': f'Bearer {API_KEY}'}, timeout=5)
+            logger.info(f"Forwarded SMS, status: {response.status_code}")
         except Exception as e:
-            print(f"[Error] DB operation failed: {e}")
-            self.send_response(500)
-            self.end_headers()
-            cursor.close()
-            return
-        cursor.close()
+            logger.warning(f"Forwarding failed: {e}")
+    
+    return {"status": "received"}
 
-        if forwarded:
-            try:
-                headers = {
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {API_KEY}'
-                }
-                response = requests.post(CF_BACKEND_URL, json=sms_data, headers=headers, timeout=5)
-                print(f"Forwarded SMS from {sender}, status: {response.status_code}")
-            except Exception as e:
-                print(f"[Warning] Forwarding to CF backend failed: {e}")
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
-        self.send_response(200)
-        self.end_headers()
-
-if __name__ == '__main__':
-    PORT = int(os.getenv('PYTHON_RECEIVER_PORT', 8080))
-    print(f"Starting SMS receiver on port {PORT}...")
-    print(f"Forwarding to CF backend: {CF_BACKEND_URL}")
-    print(f"Logging SMS to: {LOG_FILE}")
-    server_address = ('', PORT)
-    httpd = HTTPServer(server_address, SMSHandler)
-
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("Server stopped by user.")
+# Import validation functions
+from checks.blacklist_check import validate_blacklist_check
+from checks.duplicate_check import validate_duplicate_check
+from checks.header_check import validate_header_check
+from checks.hash_length_check import validate_hash_length_check
+from checks.mobile_check import validate_mobile_check
+from checks.time_window_check import validate_time_window_check

@@ -1,190 +1,403 @@
 ---
-- name: Deploy SMS Gateway Infrastructure with Vault
+- name: Deploy SMS Gateway Infrastructure with Vault (Docker Only)
   hosts: localhost
-  become: yes
+  become: no  # No sudo needed for Docker operations
 
   vars_files:
     - vault.yml  # Encrypted vault file
 
   vars:
-    pg_user: "sms_user"
+    pg_user: "postgres"  # Use default PostgreSQL superuser
     pg_db: "sms_gateway"
     pg_port: 5432
-    keydb_port: 6379
+    pgbouncer_port: 6432
+    redis_port: 6379
     prometheus_port: 9090
     grafana_port: 3001
     python_receiver_port: 8080
     python_receiver_image: "sms_receiver_image"
+    redis_password: "{{ redis_password }}"  # Reference from vault
+    hash_secret_key: "{{ hash_secret_key }}"  # Reference from vault
 
   tasks:
-  # - name: Install Docker
-  #   apt:
-  #     name: docker.io
-  #     state: present
-  #     update_cache: true
+    - name: Debug distribution info
+      debug:
+        msg: "Distribution: {{ ansible_distribution }}, OS Family: {{ ansible_os_family }}"
 
-  # - name: Install Docker Compose
-  #   apt:
-  #     name: docker-compose
-  #     state: present
+    # Commenting out all OS-level tasks to avoid apt/repository issues
+    # - name: Fix duplicate Microsoft Edge repository entries
+    #   file:
+    #     path: /etc/apt/sources.list.d/microsoft-edge-dev.list
+    #     state: absent
+    #   ignore_errors: yes
 
-  - name: Create project directory
-    file:
-      path: ~/sms_gateway
-      state: directory
+    # - name: Disable BossLinux security-updates repository
+    #   lineinfile:
+    #     path: /etc/apt/sources.list
+    #     regexp: '^deb http://packages.bosslinux.in/security-updates'
+    #     line: '#deb http://packages.bosslinux.in/security-updates urja main contrib non-free'
+    #     state: present
+    #   ignore_errors: yes
 
-  - name: Copy PostgreSQL initialization script
-    copy:
-      dest: ~/sms_gateway/init.sql
-      content: |
-        CREATE USER {{ pg_user }} WITH PASSWORD '{{ pg_password }}';
-        CREATE DATABASE {{ pg_db }} OWNER {{ pg_user }};
-        \connect {{ pg_db }};
-        CREATE TABLE IF NOT EXISTS sms_senders (
-          sender VARCHAR(32) PRIMARY KEY,
-          first_seen TIMESTAMPTZ DEFAULT now(),
-          last_seen TIMESTAMPTZ DEFAULT now()
-        );
-        CREATE TABLE IF NOT EXISTS sms_messages (
-          id SERIAL PRIMARY KEY,
-          sender VARCHAR(32) REFERENCES sms_senders(sender),
-          message TEXT,
-          timestamp TIMESTAMPTZ DEFAULT now(),
-          forwarded BOOLEAN DEFAULT FALSE
-        );
-        CREATE INDEX IF NOT EXISTS idx_sms_sender ON sms_messages(sender);
+    # - name: Disable BossLinux security-updates source repository
+    #   lineinfile:
+    #     path: /etc/apt/sources.list
+    #     regexp: '^deb-src http://packages.bosslinux.in/security-updates'
+    #     line: '#deb-src http://packages.bosslinux.in/security-updates urja main contrib non-free'
+    #     state: present
+    #   ignore_errors: yes
 
-  - name: Copy Dockerfile for Python SMS receiver
-    copy:
-      dest: ~/sms_gateway/Dockerfile
-      content: |
-        FROM python:3.11-slim
-        WORKDIR /app
-        COPY sms_server.py /app/sms_server.py
-        RUN pip install --no-cache-dir psycopg2-binary redis requests
-        EXPOSE 8080
-        CMD ["python", "sms_server.py"]
+    # - name: Disable Kubernetes repository
+    #   lineinfile:
+    #     path: /etc/apt/sources.list.d/kubernetes.list
+    #     regexp: '^deb https://apt.kubernetes.io'
+    #     line: '#deb https://apt.kubernetes.io kubernetes-xenial main'
+    #     state: present
+    #     create: no
+    #   ignore_errors: yes
 
-  - name: Copy Python SMS server script
-    copy:
-      src: ./sms_server.py
-      dest: ~/sms_gateway/sms_server.py
+    # - name: Update apt cache after fixes
+    #   apt:
+    #     update_cache: yes
+    #     cache_valid_time: 3600  # Cache for 1 hour to avoid repeated updates
 
-  - name: Create Prometheus configuration
-    copy:
-      dest: ~/sms_gateway/prometheus.yml
-      content: |
-        global:
-          scrape_interval: 15s
-        scrape_configs:
-          - job_name: 'postgres_exporter'
-            static_configs:
-              - targets: ['host.docker.internal:9187']
-          - job_name: 'redis_exporter'
-            static_configs:
-              - targets: ['host.docker.internal:9121']
+    # Docker installation tasks commented out - already installed
+    # - name: Install Docker and Docker Compose dependencies only
+    #   apt:
+    #     name:
+    #       - docker.io
+    #       - docker-compose
+    #       - python3-docker
+    #     state: present
+    #     update_cache: true
 
-  - name: Create docker-compose.yml with vaulted secrets
-    copy:
-      dest: ~/sms_gateway/docker-compose.yml
-      content: |
-        version: '3.8'
-        services:
-          postgres:
-            image: postgres:15
-            environment:
-              POSTGRES_PASSWORD: "{{ pg_password }}"
-              POSTGRES_USER: "{{ pg_user }}"
-              POSTGRES_DB: "{{ pg_db }}"
-            volumes:
-              - pg_data:/var/lib/postgresql/data
-              - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-            ports:
-              - "{{ pg_port }}:5432"
+    # - name: Start and enable Docker service
+    #   systemd:
+    #     name: docker
+    #     state: started
+    #     enabled: yes
 
-          keydb:
-            image: redis:7-alpine
-            command: ["redis-server", "--maxmemory", "256mb", "--maxclients", "1000", "--requirepass", "{{ keydb_password }}"]
-            ports:
-              - "{{ keydb_port }}:6379"
+    # - name: Add current user to docker group
+    #   user:
+    #     name: "{{ ansible_user_id }}"
+    #     groups: docker
+    #     append: yes
 
-          prometheus:
-            image: prom/prometheus:latest
-            volumes:
-              - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-            ports:
-              - "{{ prometheus_port }}:9090"
+    - name: Create project directory
+      file:
+        path: ~/sms_gateway
+        state: directory
 
-          grafana:
-            image: grafana/grafana:latest
-            environment:
-              - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
-            ports:
-              - "{{ grafana_port }}:3000"
-            depends_on:
-              - prometheus
+    - name: Create logs directory for persistent logging
+      file:
+        path: ~/sms_gateway/logs
+        state: directory
+        mode: '0755'
 
-          postgres_exporter:
-            image: prometheuscommunity/postgres-exporter
-            environment:
-              DATA_SOURCE_NAME: "postgresql://{{ pg_user }}:{{ pg_password }}@postgres:5432/{{ pg_db }}?sslmode=disable"
-            depends_on:
-              - postgres
-            ports:
-              - "9187:9187"
+    - name: Create SMS receiver logs subdirectory
+      file:
+        path: ~/sms_gateway/logs/sms_receiver
+        state: directory
+        mode: '0755'
 
-          redis_exporter:
-            image: oliver006/redis_exporter
-            command: ["-redis.addr=redis://:{{ keydb_password }}@keydb:6379"]
-            depends_on:
-              - keydb
-            ports:
-              - "9121:9121"
+    - name: Copy PostgreSQL initialization script with new schema
+      copy:
+        dest: ~/sms_gateway/init.sql
+        content: |
+          -- Just load the schema, no user creation needed
+          -- The 'postgres' user is already the superuser with full privileges
+          \i /docker-entrypoint-initdb.d/schema.sql;
 
-          sms_receiver:
-            build: .
-            ports:
-              - "{{ python_receiver_port }}:8080"
-            environment:
-              - CF_API_KEY={{ cf_api_key }}
-              - CF_BACKEND_URL={{ cf_backend_url }}
-              - POSTGRES_HOST=postgres
-              - POSTGRES_DB={{ pg_db }}
-              - POSTGRES_USER={{ pg_user }}
-              - POSTGRES_PASSWORD={{ pg_password }}
-              - POSTGRES_PORT=5432
-              - REDIS_HOST=keydb
-              - REDIS_PORT=6379
-              - REDIS_PASSWORD={{ keydb_password }}
-            depends_on:
-              - postgres
-              - keydb
+    - name: Copy database schema file
+      copy:
+        src: ./schema.sql
+        dest: ~/sms_gateway/schema.sql
 
-        volumes:
-          pg_data:
+    - name: Copy Dockerfile for Python SMS receiver
+      copy:
+        dest: ~/sms_gateway/Dockerfile
+        content: |
+          FROM python:3.11-slim
+          WORKDIR /app
+          COPY sms_server.py /app/sms_server.py
+          COPY checks/ /app/checks/
+          RUN pip install --no-cache-dir psycopg2-binary redis requests fastapi uvicorn asyncpg
+          EXPOSE 8080
+          CMD ["uvicorn", "sms_server:app", "--host", "0.0.0.0", "--port", "8080"]
 
-  - name: Build Python SMS receiver Docker image
-    shell: docker-compose -f ~/sms_gateway/docker-compose.yml build sms_receiver
+    - name: Copy Python SMS server script
+      copy:
+        src: ./sms_server.py
+        dest: ~/sms_gateway/sms_server.py
 
-  - name: Start all containers
-    shell: docker-compose -f ~/sms_gateway/docker-compose.yml up -d
+    - name: Copy validation check files
+      copy:
+        src: ./checks/
+        dest: ~/sms_gateway/checks/
 
-  - name: Show container status with verbose output
-    shell: |
-      echo "=== Container Status ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml ps -a
-      echo ""
-      echo "=== KeyDB Container Logs ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml logs keydb
-      echo ""
-      echo "=== SMS Receiver Container Logs ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml logs sms_receiver
-      echo ""
-      echo "=== Redis Exporter Container Logs ==="
-      docker-compose -f ~/sms_gateway/docker-compose.yml logs redis_exporter
-    register: container_debug
-    ignore_errors: yes
+    - name: Create Prometheus configuration
+      copy:
+        dest: ~/sms_gateway/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: 'postgres_exporter'
+              static_configs:
+                - targets: ['localhost:9187']
+            - job_name: 'redis_exporter'
+              static_configs:
+                - targets: ['localhost:9121']
+            - job_name: 'sms_server'
+              static_configs:
+                - targets: ['localhost:8080']
 
-  - name: Display debug output
-    debug:
-      var: container_debug.stdout_lines
+    - name: Create Grafana provisioning directory structure
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - ~/sms_gateway/grafana/provisioning/datasources
+        - ~/sms_gateway/grafana/provisioning/dashboards
+
+    - name: Create Grafana datasource configuration
+      copy:
+        dest: ~/sms_gateway/grafana/provisioning/datasources/prometheus.yml
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://prometheus:9090
+              isDefault: true
+
+    - name: Create Grafana dashboard configuration
+      copy:
+        dest: ~/sms_gateway/grafana/provisioning/dashboards/dashboards.yml
+        content: |
+          apiVersion: 1
+          providers:
+            - name: 'default'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              updateIntervalSeconds: 10
+              allowUiUpdates: true
+              options:
+                path: /etc/grafana/provisioning/dashboards
+
+    - name: Create PostgreSQL monitoring dashboard
+      copy:
+        dest: ~/sms_gateway/grafana/provisioning/dashboards/postgres-dashboard.json
+        content: |
+          {
+            "dashboard": {
+              "id": null,
+              "title": "PostgreSQL Database",
+              "tags": [ "postgresql" ],
+              "style": "dark",
+              "timezone": "browser",
+              "panels": [
+                {
+                  "id": 1,
+                  "title": "Database Connections",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "pg_stat_database_numbackends{datname=\"sms_gateway\"}",
+                      "legendFormat": "Active Connections"
+                    }
+                  ],
+                  "yAxes": [
+                    {
+                      "label": "Connections",
+                      "min": 0
+                    }
+                  ],
+                  "xAxes": [
+                    {
+                      "mode": "time"
+                    }
+                  ],
+                  "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 0
+                  }
+                },
+                {
+                  "id": 2,
+                  "title": "Database Size",
+                  "type": "graph",
+                  "targets": [
+                    {
+                      "expr": "pg_database_size_bytes{datname=\"sms_gateway\"}",
+                      "legendFormat": "Database Size"
+                    }
+                  ],
+                  "yAxes": [
+                    {
+                      "label": "Bytes",
+                      "min": 0
+                    }
+                  ],
+                  "xAxes": [
+                    {
+                      "mode": "time"
+                    }
+                  ],
+                  "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 0
+                  }
+                }
+              ],
+              "time": {
+                "from": "now-1h",
+                "to": "now"
+              },
+              "refresh": "5s"
+            }
+          }
+
+    - name: Create docker-compose.yml with vaulted secrets
+      copy:
+        dest: ~/sms_gateway/docker-compose.yml
+        content: |
+          version: '3.8'
+          services:
+            postgres:
+              image: postgres:15
+              environment:
+                POSTGRES_PASSWORD: "{{ pg_password }}"
+                POSTGRES_DB: "{{ pg_db }}"
+                # Use default 'postgres' superuser
+              volumes:
+                - pg_data:/var/lib/postgresql/data
+                - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+                - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+              ports:
+                - "{{ pg_port }}:5432"
+
+            pgbouncer:
+              image: brainsam/pgbouncer
+              environment:
+                DB_HOST: postgres
+                DB_PORT: 5432
+                DB_USER: "{{ pg_user }}"
+                DB_PASSWORD: "{{ pg_password }}"
+                DB_NAME: "{{ pg_db }}"
+                POOL_MODE: transaction
+                MAX_CLIENT_CONN: 1000
+                DEFAULT_POOL_SIZE: 10
+              ports:
+                - "{{ pgbouncer_port }}:6432"
+              depends_on:
+                - postgres
+
+            redis:
+              image: redis:7-alpine
+              command: ["redis-server", "--maxmemory", "256mb", "--maxclients", "1000", "--requirepass", "{{ redis_password }}"]
+              ports:
+                - "{{ redis_port }}:6379"
+
+            prometheus:
+              image: prom/prometheus:latest
+              volumes:
+                - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+              ports:
+                - "{{ prometheus_port }}:9090"
+
+            grafana:
+              image: grafana/grafana:latest
+              environment:
+                - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+              volumes:
+                - ./grafana/provisioning:/etc/grafana/provisioning:ro
+              ports:
+                - "{{ grafana_port }}:3000"
+              depends_on:
+                - prometheus
+
+            postgres_exporter:
+              image: prometheuscommunity/postgres-exporter
+              environment:
+                DATA_SOURCE_NAME: "postgresql://{{ pg_user }}:{{ pg_password }}@postgres:5432/{{ pg_db }}?sslmode=disable"
+              depends_on:
+                - postgres
+              ports:
+                - "9187:9187"
+
+            redis_exporter:
+              image: oliver006/redis_exporter
+              command: ["-redis.addr=redis://:{{ redis_password }}@redis:6379"]
+              depends_on:
+                - redis
+              ports:
+                - "9121:9121"
+
+            sms_receiver:
+              build: .
+              ports:
+                - "{{ python_receiver_port }}:8080"
+              volumes:
+                - ./logs:/app/logs:rw  # Mount logs directory for persistent logging
+                - ./logs/sms_receiver:/var/log/sms_receiver:rw  # Additional log location
+              environment:
+                - CF_API_KEY={{ cf_api_key }}
+                - CF_BACKEND_URL={{ cf_backend_url }}
+                - POSTGRES_HOST=pgbouncer
+                - POSTGRES_DB={{ pg_db }}
+                - POSTGRES_USER={{ pg_user }}
+                - POSTGRES_PASSWORD={{ pg_password }}
+                - POSTGRES_PORT={{ pgbouncer_port }}
+                - REDIS_HOST=redis
+                - REDIS_PORT=6379
+                - REDIS_PASSWORD={{ redis_password }}
+                - HASH_SECRET_KEY={{ hash_secret_key }}  # Added for hash validation
+                - LOG_LEVEL=INFO  # Set log level via environment
+                - LOG_DIR=/app/logs  # Log directory inside container
+              depends_on:
+                - postgres
+                - pgbouncer
+                - redis
+
+          volumes:
+            pg_data:
+
+    - name: Build Python SMS receiver Docker image
+      shell: docker-compose -f ~/sms_gateway/docker-compose.yml build sms_receiver
+      become: no
+
+    - name: Start all containers
+      shell: docker-compose -f ~/sms_gateway/docker-compose.yml up -d
+      become: no
+
+    - name: Show container status with verbose output
+      shell: |
+        echo "=== Container Status ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml ps -a
+        echo ""
+        echo "=== Redis Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs redis
+        echo ""
+        echo "=== SMS Receiver Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs sms_receiver
+        echo ""
+        echo "=== Redis Exporter Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs redis_exporter
+        echo ""
+        echo "=== PostgreSQL Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs pg
+      register: container_debug
+      ignore_errors: yes
+
+    - name: Display debug output
+      debug:
+        var: container_debug.stdout_lines

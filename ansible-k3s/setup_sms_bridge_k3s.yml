@@ -777,11 +777,14 @@
                   - name: grafana-datasources
                     mountPath: /etc/grafana/provisioning/datasources
                   - name: grafana-dashboards-config
-                    mountPath: /etc/grafana/provisioning/dashboards
+                    mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+                    subPath: dashboards.yml
                   - name: grafana-dashboard
-                    mountPath: /etc/grafana/provisioning/dashboards
+                    mountPath: /etc/grafana/provisioning/dashboards/postgres-dashboard.json
+                    subPath: postgres-dashboard.json
                   - name: grafana-sms-dashboard
-                    mountPath: /etc/grafana/provisioning/dashboards
+                    mountPath: /etc/grafana/provisioning/dashboards/sms-dashboard.json
+                    subPath: sms-dashboard.json
                   resources:
                     limits:
                       memory: "512Mi"

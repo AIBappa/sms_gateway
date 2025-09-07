@@ -183,13 +183,11 @@
     - name: Start SMS Receiver container
       community.docker.docker_container:
         name: sms_receiver
-        image: python:3.11-slim
+        image: sms_receiver:latest
         state: started
         restart_policy: always
         working_dir: /app
-        command: >
-          sh -c "pip install fastapi uvicorn asyncpg redis prometheus_client &&
-                 python sms_server.py"
+        command: python sms_server.py
         env:
           DB_HOST: pgbouncer
           DB_PORT: "5432"

@@ -805,6 +805,7 @@
                 containers:
                 - name: redis-exporter
                   image: oliver006/redis_exporter
+                  command: ["/redis_exporter"]
                   ports:
                   - containerPort: 9121
                   args: ["-redis.addr=redis://:$(REDIS_PASSWORD)@redis:6379"]
@@ -970,7 +971,7 @@
         kubeconfig: /etc/rancher/k3s/k3s.yaml
       loop:
         - "{{ project_dir }}/k3s-manifests/04-postgres.yaml"
-        -         ansible-playbook ansible-k3s/setup_sms_bridge_k3s.yml --ask-vault-pass"{{ project_dir }}/k3s-manifests/05-redis.yaml"
+        - "{{ project_dir }}/k3s-manifests/05-redis.yaml"
         - "{{ project_dir }}/k3s-manifests/06-pgbouncer.yaml"
 
     - name: Wait for database services to be ready

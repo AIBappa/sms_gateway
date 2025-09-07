@@ -693,8 +693,7 @@
                   - name: grafana-dashboards-config
                     mountPath: /etc/grafana/provisioning/dashboards
                   - name: grafana-dashboard
-                    mountPath: /etc/grafana/provisioning/dashboards/postgres-dashboard.json
-                    subPath: postgres-dashboard.json
+                    mountPath: /etc/grafana/provisioning/dashboards
                   resources:
                     limits:
                       memory: "512Mi"
@@ -808,7 +807,6 @@
                   image: oliver006/redis_exporter
                   ports:
                   - containerPort: 9121
-                  command: ["redis_exporter"]
                   args: ["-redis.addr=redis://:$(REDIS_PASSWORD)@redis:6379"]
                   env:
                   - name: REDIS_PASSWORD
@@ -972,7 +970,7 @@
         kubeconfig: /etc/rancher/k3s/k3s.yaml
       loop:
         - "{{ project_dir }}/k3s-manifests/04-postgres.yaml"
-        - "{{ project_dir }}/k3s-manifests/05-redis.yaml"
+        -         ansible-playbook ansible-k3s/setup_sms_bridge_k3s.yml --ask-vault-pass"{{ project_dir }}/k3s-manifests/05-redis.yaml"
         - "{{ project_dir }}/k3s-manifests/06-pgbouncer.yaml"
 
     - name: Wait for database services to be ready

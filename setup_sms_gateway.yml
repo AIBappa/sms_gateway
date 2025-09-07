@@ -393,8 +393,8 @@
         echo "=== Redis Exporter Container Logs ==="
         docker-compose -f ~/sms_gateway/docker-compose.yml logs redis_exporter
         echo ""
-        echo "=== Redis Container Logs ==="
-        docker-compose -f ~/sms_gateway/docker-compose.yml logs redis
+        echo "=== PostgreSQL Container Logs ==="
+        docker-compose -f ~/sms_gateway/docker-compose.yml logs pg
       register: container_debug
       ignore_errors: yes
 

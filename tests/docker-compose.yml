@@ -4,9 +4,9 @@ services:
   sms_test_app:
     build: .
     ports:
-      - "3000:3000"
+      - "3002:3000"
     environment:
-      - SMS_BRIDGE_URL=http://host.docker.internal:8080
+      - SMS_BRIDGE_URL=http://host.docker.internal:30080
     volumes:
       - ./uploads:/app/uploads
       - ./sample_sms_data.csv:/app/sample_sms_data.csv:ro

@@ -10,7 +10,7 @@ app = Flask(__name__)
 app.secret_key = 'sms_bridge_test_secret_key'
 
 # Configuration
-SMS_BRIDGE_URL = os.getenv('SMS_BRIDGE_URL', 'http://localhost:8080')
+SMS_BRIDGE_URL = os.getenv('SMS_BRIDGE_URL', 'http://localhost:30080')
 UPLOAD_FOLDER = '/app/uploads'
 ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'csv'}
 

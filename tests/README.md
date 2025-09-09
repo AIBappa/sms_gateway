@@ -25,7 +25,7 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-The application will be available at: `http://localhost:3000`
+The application will be available at: `http://localhost:3002`
 
 ### Manual Setup
 
@@ -33,8 +33,8 @@ The application will be available at: `http://localhost:3000`
 # Install dependencies
 pip install -r requirements.txt
 
-# Set environment variable (optional)
-export SMS_BRIDGE_URL=http://localhost:8080
+# Set environment variable (optional - defaults to K3s NodePort)
+export SMS_BRIDGE_URL=http://localhost:30080
 
 # Run the application
 python test_app.py
@@ -44,7 +44,7 @@ python test_app.py
 
 ### 1. Web Interface
 
-Open `http://localhost:3000` in your browser to access the web interface.
+Open `http://localhost:3002` in your browser to access the web interface.
 
 #### Single SMS Testing
 - Fill in the sender number, SMS message, and timestamp
@@ -70,7 +70,7 @@ A sample CSV file (`sample_sms_data.csv`) is included with test data that matche
 Send SMS programmatically:
 
 ```bash
-curl -X POST http://localhost:3000/api/send_sms \
+curl -X POST http://localhost:3002/api/send_sms \
   -H "Content-Type: application/json" \
   -d '{
     "sender_number": "+1234567890",
@@ -82,14 +82,14 @@ curl -X POST http://localhost:3000/api/send_sms \
 ### 4. Health Check
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:3002/health
 ```
 
 ## Configuration
 
 ### Environment Variables
 
-- `SMS_BRIDGE_URL`: URL of the SMS Bridge server (default: http://localhost:8080)
+- `SMS_BRIDGE_URL`: URL of the SMS Bridge server (default: http://localhost:30080 for K3s deployment)
 
 ### Docker Configuration
 
@@ -113,7 +113,7 @@ The application is designed to test the SMS Bridge validation workflow:
 
 ```bash
 # Test single valid SMS
-curl -X POST http://localhost:3000/api/send_sms \
+curl -X POST http://localhost:3002/api/send_sms \
   -H "Content-Type: application/json" \
   -d '{
     "sender_number": "+1234567890",
@@ -122,7 +122,7 @@ curl -X POST http://localhost:3000/api/send_sms \
   }'
 
 # Test invalid SMS (no mobile number)
-curl -X POST http://localhost:3000/api/send_sms \
+curl -X POST http://localhost:3002/api/send_sms \
   -H "Content-Type: application/json" \
   -d '{
     "sender_number": "+1234567891",
@@ -151,7 +151,7 @@ docker-compose logs -f sms_test_app
 ### Common Issues
 
 1. **Cannot connect to SMS Bridge**
-   - Ensure SMS Bridge is running on localhost:8080
+   - Ensure SMS Bridge is running on localhost:30080 (K3s NodePort)
    - Check Docker network connectivity
    - Verify SMS_BRIDGE_URL environment variable
 
@@ -167,11 +167,11 @@ docker-compose logs -f sms_test_app
 ### Debug Commands
 
 ```bash
-# Check if SMS Bridge is accessible
-curl http://localhost:8080/health
+# Check if SMS Bridge is accessible (K3s deployment)
+curl http://localhost:30080/health
 
 # Test connectivity from container
-docker-compose exec sms_test_app curl http://host.docker.internal:8080/health
+docker-compose exec sms_test_app curl http://host.docker.internal:30080/health
 
 # Check container logs
 docker-compose logs sms_test_app

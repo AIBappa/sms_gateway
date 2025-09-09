@@ -216,7 +216,12 @@ async def batch_processor():
             """, last_uuid, batch_size)
         
         if rows:
-            batch_data = [BatchSMSData(**dict(row)) for row in rows]
+            # Convert UUID objects to strings for Pydantic model
+            batch_data = []
+            for row in rows:
+                row_dict = dict(row)
+                row_dict['uuid'] = str(row_dict['uuid'])  # Convert UUID to string
+                batch_data.append(BatchSMSData(**row_dict))
             await run_validation_checks(batch_data)
             
             # Update last_processed_uuid

@@ -185,6 +185,20 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
                     INSERT INTO out_sms (uuid, sender_number, sms_message) VALUES ($1, $2, $3)
                 """, sms.uuid, sms.sender_number, sms.sms_message)
             redis_client.sadd('out_sms_numbers', sms.sender_number)
+            
+            # Forward to cloud backend only after validation passes
+            if CF_BACKEND_URL and API_KEY:
+                try:
+                    # Convert datetime to string for JSON serialization
+                    sms_dict = {
+                        'sender_number': sms.sender_number,
+                        'sms_message': sms.sms_message,
+                        'received_timestamp': sms.received_timestamp.isoformat()
+                    }
+                    response = requests.post(CF_BACKEND_URL, json=sms_dict, headers={'Authorization': f'Bearer {API_KEY}'}, timeout=5)
+                    logger.info(f"Forwarded validated SMS to cloud, status: {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"Cloud forwarding failed for validated SMS: {e}")
 
 async def batch_processor():
     while True:
@@ -234,14 +248,6 @@ async def receive_sms(sms_data: SMSInput, background_tasks: BackgroundTasks):
             INSERT INTO input_sms (sender_number, sms_message, received_timestamp) 
             VALUES ($1, $2, $3)
         """, sms_data.sender_number, sms_data.sms_message, sms_data.received_timestamp)
-    
-    # Optionally forward to CF backend
-    if CF_BACKEND_URL and API_KEY:
-        try:
-            response = requests.post(CF_BACKEND_URL, json=sms_data.dict(), headers={'Authorization': f'Bearer {API_KEY}'}, timeout=5)
-            logger.info(f"Forwarded SMS, status: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"Forwarding failed: {e}")
     
     return {"status": "received"}
 

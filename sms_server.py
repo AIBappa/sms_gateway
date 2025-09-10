@@ -2,8 +2,10 @@ import os
 import json
 import asyncio
 import logging
+import secrets
+import hashlib
 from datetime import datetime, timezone
-from typing import List, Dict
+from typing import List, Dict, Optional
 import asyncpg
 import redis
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -21,6 +23,15 @@ class BatchSMSData(BaseModel):
     sender_number: str
     sms_message: str
     received_timestamp: datetime
+
+# New models for onboarding functionality
+class OnboardingRequest(BaseModel):
+    mobile_number: str
+
+class OnboardingResponse(BaseModel):
+    mobile_number: str
+    hash: str
+    message: str
 
 # Load configuration
 CONFIG_FILE = os.path.expanduser('~/sms_bridge_config.json')
@@ -127,8 +138,8 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
         results = {
             'blacklist_check': 0,
             'duplicate_check': 0,
-            'header_check': 0,
-            'hash_length_check': 0,
+            'foreign_number_check': 0,
+            'header_hash_check': 0,
             'mobile_check': 0,
             'time_window_check': 0
         }
@@ -163,7 +174,7 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
         async with pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO sms_monitor (uuid, overall_status, failed_at_check, processing_completed_at, 
-                                         blacklist_check, duplicate_check, header_check, hash_length_check, 
+                                         blacklist_check, duplicate_check, foreign_number_check, header_hash_check, 
                                          mobile_check, time_window_check)
                 VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (uuid) DO UPDATE SET 
@@ -172,8 +183,8 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
                     processing_completed_at = EXCLUDED.processing_completed_at,
                     blacklist_check = EXCLUDED.blacklist_check,
                     duplicate_check = EXCLUDED.duplicate_check,
-                    header_check = EXCLUDED.header_check,
-                    hash_length_check = EXCLUDED.hash_length_check,
+                    foreign_number_check = EXCLUDED.foreign_number_check,
+                    header_hash_check = EXCLUDED.header_hash_check,
                     mobile_check = EXCLUDED.mobile_check,
                     time_window_check = EXCLUDED.time_window_check
             """, sms.uuid, overall_status, failed_check, *results.values())
@@ -256,6 +267,146 @@ async def receive_sms(sms_data: SMSInput, background_tasks: BackgroundTasks):
     
     return {"status": "received"}
 
+@app.post("/onboarding/register", response_model=OnboardingResponse)
+async def register_mobile(request: OnboardingRequest):
+    """
+    Register a mobile number for onboarding and generate hash.
+    Returns the mobile number, hash, and instruction message.
+    """
+    try:
+        pool = await get_db_pool()
+        mobile_number = request.mobile_number.strip()
+        
+        # Validate mobile number format
+        import re
+        if not re.match(r'^\d{10,15}$', mobile_number):
+            raise HTTPException(status_code=400, detail="Invalid mobile number format")
+        
+        # Generate salt
+        async with pool.acquire() as conn:
+            salt_length = int(await conn.fetchval(
+                "SELECT setting_value FROM system_settings WHERE setting_key = 'hash_salt_length'"
+            ))
+        
+        salt = secrets.token_hex(salt_length // 2)  # hex gives 2 chars per byte
+        
+        # Check if mobile number already exists and is active
+        async with pool.acquire() as conn:
+            existing = await conn.fetchrow(
+                "SELECT mobile_number, is_active FROM onboarding_mobile WHERE mobile_number = $1",
+                mobile_number
+            )
+            
+            if existing and existing['is_active']:
+                raise HTTPException(status_code=409, detail="Mobile number already registered and active")
+            
+            # Insert or update onboarding record
+            if existing:
+                # Reactivate existing record with new salt
+                await conn.execute("""
+                    UPDATE onboarding_mobile 
+                    SET salt = $1, request_timestamp = NOW(), is_active = true 
+                    WHERE mobile_number = $2
+                """, salt, mobile_number)
+            else:
+                # Create new record
+                await conn.execute("""
+                    INSERT INTO onboarding_mobile (mobile_number, salt, hash) 
+                    VALUES ($1, $2, $3)
+                """, mobile_number, salt, "")  # hash will be computed below
+        
+        # Generate hash for demonstration (header + mobile + salt)
+        # Using a default header "TEST" for the example
+        demo_header = "TEST"
+        data_to_hash = f"{demo_header}{mobile_number}{salt}"
+        computed_hash = hashlib.sha256(data_to_hash.encode('utf-8')).hexdigest()
+        
+        # Update the hash in database
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE onboarding_mobile SET hash = $1 WHERE mobile_number = $2",
+                computed_hash, mobile_number
+            )
+        
+        message = f"Send SMS: {demo_header} {mobile_number} {computed_hash}"
+        
+        return OnboardingResponse(
+            mobile_number=mobile_number,
+            hash=computed_hash,
+            message=message
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in register_mobile: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/onboarding/status/{mobile_number}")
+async def get_onboarding_status(mobile_number: str):
+    """
+    Get onboarding status for a mobile number.
+    """
+    try:
+        pool = await get_db_pool()
+        
+        async with pool.acquire() as conn:
+            onboarding_record = await conn.fetchrow(
+                "SELECT mobile_number, request_timestamp, is_active FROM onboarding_mobile WHERE mobile_number = $1",
+                mobile_number
+            )
+            
+            if not onboarding_record:
+                raise HTTPException(status_code=404, detail="Mobile number not found in onboarding system")
+            
+            # Check if any SMS has been successfully validated for this mobile
+            sms_validated = await conn.fetchval("""
+                SELECT EXISTS(
+                    SELECT 1 FROM input_sms i 
+                    JOIN sms_monitor m ON i.uuid = m.uuid 
+                    WHERE i.sms_message LIKE '%' || $1 || '%' 
+                    AND m.overall_status = 'valid'
+                )
+            """, mobile_number)
+        
+        return {
+            "mobile_number": onboarding_record['mobile_number'],
+            "request_timestamp": onboarding_record['request_timestamp'],
+            "is_active": onboarding_record['is_active'],
+            "sms_validated": sms_validated
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_onboarding_status: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.delete("/onboarding/{mobile_number}")
+async def deactivate_mobile(mobile_number: str):
+    """
+    Deactivate a mobile number from onboarding system.
+    """
+    try:
+        pool = await get_db_pool()
+        
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE onboarding_mobile SET is_active = false WHERE mobile_number = $1",
+                mobile_number
+            )
+            
+            if result == "UPDATE 0":
+                raise HTTPException(status_code=404, detail="Mobile number not found")
+        
+        return {"message": "Mobile number deactivated successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in deactivate_mobile: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
@@ -263,8 +414,8 @@ async def health_check():
 # Import validation functions
 from checks.blacklist_check import validate_blacklist_check
 from checks.duplicate_check import validate_duplicate_check
-from checks.header_check import validate_header_check
-from checks.hash_length_check import validate_hash_length_check
+from checks.foreign_number_check import validate_foreign_number_check
+from checks.header_hash_check import validate_header_hash_check
 from checks.mobile_check import validate_mobile_check
 from checks.time_window_check import validate_time_window_check
 
@@ -272,8 +423,8 @@ from checks.time_window_check import validate_time_window_check
 VALIDATION_FUNCTIONS = {
     'blacklist': validate_blacklist_check,
     'duplicate': validate_duplicate_check,
-    'header': validate_header_check,
-    'hash_length': validate_hash_length_check,
+    'foreign_number': validate_foreign_number_check,
+    'header_hash': validate_header_hash_check,
     'mobile': validate_mobile_check,
     'time_window': validate_time_window_check
 }

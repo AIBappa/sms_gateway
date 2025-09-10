@@ -6,3 +6,8 @@ sms_env/
 
 # Ignore local config files
 sms_bridge_config.json
+
+# Ignore additional prompt
+docs/update_prompt1.md
+
+

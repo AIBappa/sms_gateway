@@ -2,6 +2,7 @@ import os
 import json
 import pandas as pd
 import requests
+import hashlib
 from datetime import datetime
 from flask import Flask, request, render_template, jsonify, redirect, url_for, flash
 from werkzeug.utils import secure_filename
@@ -48,10 +49,169 @@ def send_sms_to_bridge(sender_number, sms_message, received_timestamp):
             'error': str(e)
         }
 
+def register_mobile_onboarding(mobile_number):
+    """Register mobile number for onboarding"""
+    try:
+        payload = {
+            "mobile_number": mobile_number
+        }
+        
+        response = requests.post(
+            f"{SMS_BRIDGE_URL}/onboarding/register",
+            json=payload,
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        
+        return {
+            'success': response.status_code == 200,
+            'status_code': response.status_code,
+            'data': response.json() if response.headers.get('content-type') == 'application/json' else response.text
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+def get_onboarding_status(mobile_number):
+    """Get onboarding status for mobile number"""
+    try:
+        response = requests.get(
+            f"{SMS_BRIDGE_URL}/onboarding/status/{mobile_number}",
+            timeout=10
+        )
+        
+        return {
+            'success': response.status_code == 200,
+            'status_code': response.status_code,
+            'data': response.json() if response.headers.get('content-type') == 'application/json' else response.text
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+def register_mobile_onboarding(mobile_number):
+    """Register mobile number for onboarding"""
+    try:
+        payload = {
+            "mobile_number": mobile_number
+        }
+        
+        response = requests.post(
+            f"{SMS_BRIDGE_URL}/onboarding/register",
+            json=payload,
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return {
+                'success': True,
+                'data': response.json()
+            }
+        else:
+            return {
+                'success': False,
+                'error': response.text,
+                'status_code': response.status_code
+            }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+def get_onboarding_status(mobile_number):
+    """Get onboarding status for mobile number"""
+    try:
+        response = requests.get(
+            f"{SMS_BRIDGE_URL}/onboarding/status/{mobile_number}",
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return {
+                'success': True,
+                'data': response.json()
+            }
+        else:
+            return {
+                'success': False,
+                'error': response.text,
+                'status_code': response.status_code
+            }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
 @app.route('/')
 def index():
-    """Main page with single SMS form and file upload"""
+    """Main page with onboarding, single SMS form and file upload"""
     return render_template('index.html')
+
+@app.route('/onboarding')
+def onboarding():
+    """Onboarding page for mobile validation"""
+    return render_template('onboarding.html')
+
+@app.route('/register_mobile', methods=['POST'])
+def register_mobile():
+    """Register mobile number for onboarding"""
+    mobile_number = request.form.get('mobile_number')
+    
+    # Validate input
+    if not mobile_number:
+        flash('Mobile number is required', 'error')
+        return redirect(url_for('onboarding'))
+    
+    # Validate mobile number format
+    import re
+    if not re.match(r'^\d{10,15}$', mobile_number.strip()):
+        flash('Invalid mobile number format. Please enter 10-15 digits only.', 'error')
+        return redirect(url_for('onboarding'))
+    
+    # Register with SMS Bridge
+    result = register_mobile_onboarding(mobile_number.strip())
+    
+    if result['success']:
+        data = result['data']
+        flash(f'Mobile registered successfully!', 'success')
+        return render_template('onboarding.html', 
+                             mobile_number=data['mobile_number'],
+                             hash_value=data['hash'],
+                             sms_message=data['message'])
+    else:
+        error_msg = result.get('error', f'Failed with status code: {result.get("status_code")}')
+        flash(f'Failed to register mobile: {error_msg}', 'error')
+        return redirect(url_for('onboarding'))
+
+@app.route('/check_status', methods=['POST'])
+def check_onboarding_status():
+    """Check onboarding status for mobile number"""
+    mobile_number = request.form.get('mobile_number')
+    
+    # Validate input
+    if not mobile_number:
+        flash('Mobile number is required', 'error')
+        return redirect(url_for('onboarding'))
+    
+    # Get status from SMS Bridge
+    result = get_onboarding_status(mobile_number.strip())
+    
+    if result['success']:
+        data = result['data']
+        return render_template('onboarding.html',
+                             status_mobile=data['mobile_number'],
+                             status_data=data)
+    else:
+        error_msg = result.get('error', f'Failed with status code: {result.get("status_code")}')
+        flash(f'Failed to get status: {error_msg}', 'error')
+        return redirect(url_for('onboarding'))
 
 @app.route('/send_single', methods=['POST'])
 def send_single_sms():

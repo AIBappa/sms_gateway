@@ -97,6 +97,23 @@
             margin-top: 10px;
             border-left: 4px solid #007bff;
         }
+        .navigation {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .navigation a {
+            color: #007bff;
+            text-decoration: none;
+            padding: 10px 20px;
+            margin: 0 10px;
+            border: 2px solid #007bff;
+            border-radius: 5px;
+            display: inline-block;
+        }
+        .navigation a:hover {
+            background-color: #007bff;
+            color: white;
+        }
         code {
             background-color: #e9ecef;
             padding: 2px 5px;
@@ -111,6 +128,11 @@
     </style>
 </head>
 <body>
+    <div class="navigation">
+        <a href="{{ url_for('index') }}">SMS Testing</a>
+        <a href="{{ url_for('onboarding') }}">Mobile Onboarding</a>
+    </div>
+
     <h1>📱 SMS Bridge Test Application</h1>
     
     <!-- Flash Messages -->

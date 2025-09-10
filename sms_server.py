@@ -316,8 +316,8 @@ async def register_mobile(request: OnboardingRequest):
                 """, mobile_number, salt, "")  # hash will be computed below
         
         # Generate hash for demonstration (header + mobile + salt)
-        # Using a default header "TEST" for the example
-        demo_header = "TEST"
+        # Using "ONBOARD" header as per requirements
+        demo_header = "ONBOARD"
         data_to_hash = f"{demo_header}{mobile_number}{salt}"
         computed_hash = hashlib.sha256(data_to_hash.encode('utf-8')).hexdigest()
         
@@ -328,7 +328,7 @@ async def register_mobile(request: OnboardingRequest):
                 computed_hash, mobile_number
             )
         
-        message = f"Send SMS: {demo_header} {mobile_number} {computed_hash}"
+        message = f"ONBOARD:{computed_hash}"
         
         return OnboardingResponse(
             mobile_number=mobile_number,

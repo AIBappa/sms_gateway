@@ -101,13 +101,6 @@
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
 
-    - name: Copy onboarding schema updates file
-      copy:
-        src: ../schema_onboarding_updates.sql
-        dest: "{{ project_dir }}/schema_onboarding_updates.sql"
-        owner: "{{ ansible_user_id }}"
-        group: "{{ ansible_user_id }}"
-
     - name: Copy Python SMS server script
       copy:
         src: ../sms_server.py
@@ -213,11 +206,8 @@
               -- Just load the schema, no user creation needed
               -- The 'postgres' user is already the superuser with full privileges
               \i /docker-entrypoint-initdb.d/schema.sql;
-              \i /docker-entrypoint-initdb.d/schema_onboarding_updates.sql;
             schema.sql: |
               {{ lookup('file', '../schema.sql') | indent(6) }}
-            schema_onboarding_updates.sql: |
-              {{ lookup('file', '../schema_onboarding_updates.sql') | indent(6) }}
         owner: "{{ ansible_user_id }}"
         group: "{{ ansible_user_id }}"
 

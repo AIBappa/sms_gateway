@@ -17,8 +17,7 @@ CREATE TABLE IF NOT EXISTS sms_monitor (
     uuid UUID PRIMARY KEY REFERENCES input_sms(uuid),
     blacklist_check INTEGER DEFAULT 0,
     duplicate_check INTEGER DEFAULT 0,
-    header_check INTEGER DEFAULT 0,
-    hash_length_check INTEGER DEFAULT 0,
+    header_hash_check INTEGER DEFAULT 0,
     mobile_check INTEGER DEFAULT 0,
     time_window_check INTEGER DEFAULT 0,
     overall_status VARCHAR(20) DEFAULT 'pending',
@@ -47,8 +46,8 @@ SELECT setting_key, setting_value FROM (VALUES
     ('batch_size', '20'),
     ('blacklist_threshold', '10'),
     ('last_processed_uuid', '00000000-0000-0000-0000-000000000000'),
-    ('check_sequence', '["blacklist", "duplicate", "header", "hash_length", "mobile", "time_window"]'),
-    ('check_enabled', '{"blacklist":true, "duplicate":true, "header":true, "hash_length":true, "mobile":true, "time_window":true}'),
+    ('check_sequence', '["blacklist", "duplicate", "foreign_number", "header_hash", "mobile", "time_window"]'),
+    ('check_enabled', '{"blacklist":true, "duplicate":true, "foreign_number":true, "header_hash":true, "mobile":true, "time_window":true}'),
     ('validation_time_window', '3600'),
     ('out_sms_cache_ttl', '604800'),
     ('max_database_retries', '3'),
@@ -123,10 +122,13 @@ WHERE NOT EXISTS (
     SELECT 1 FROM system_settings WHERE system_settings.setting_key = new_settings.setting_key
 );
 
--- Update sms_monitor table to include new foreign_number_check column
+-- Update sms_monitor table to include new columns and remove obsolete ones
 ALTER TABLE sms_monitor ADD COLUMN IF NOT EXISTS foreign_number_check INTEGER DEFAULT 0;
+ALTER TABLE sms_monitor ADD COLUMN IF NOT EXISTS header_hash_check INTEGER DEFAULT 0;
+ALTER TABLE sms_monitor DROP COLUMN IF EXISTS header_check;
+ALTER TABLE sms_monitor DROP COLUMN IF EXISTS hash_length_check;
 
--- Update check_sequence and check_enabled settings to include new foreign_number check
+-- Update check_sequence and check_enabled settings to reflect consolidated checks
 UPDATE system_settings 
 SET setting_value = '["blacklist", "duplicate", "foreign_number", "header_hash", "mobile", "time_window"]'
 WHERE setting_key = 'check_sequence';

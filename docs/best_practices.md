@@ -1,6 +1,6 @@
-# SMS Gateway Best Practices
+# SMS Bridge Best Practices
 
-This document outlines best practices for operating and maintaining the SMS Gateway system, including cybersecurity, monitoring, and backup procedures.
+This document outlines best practices for operating and maintaining the SMS Bridge system, including cybersecurity, monitoring, and backup procedures.
 
 ## Cybersecurity Best Practices
 
@@ -119,7 +119,7 @@ The Ansible playbook now includes automated Grafana configuration:
 - Document incident response procedures for handling breaches or failures.
 - Ensure high availability by considering load balancers and failover mechanisms for production deployments.
 
-For more details on the system setup, refer to the main Ansible playbook (`setup_sms_gateway.yml`) and configuration files.
+For more details on the system setup, refer to the main Ansible playbook (`setup_sms_bridge.yml`) and configuration files.
 
 ## Access and Credentials
 
@@ -182,10 +182,10 @@ curl -s http://localhost:9121/metrics | grep -E "redis_up|redis_connected_client
 #### 4. Database Connectivity Tests
 ```bash
 # Test PostgreSQL direct connection
-docker exec postgres psql -U postgres -d sms_gateway -c "SELECT COUNT(*) FROM input_sms;"
+docker exec postgres psql -U postgres -d sms_bridge -c "SELECT COUNT(*) FROM input_sms;"
 
 # Test PgBouncer connection
-docker exec postgres psql -U postgres -h localhost -p 6432 -d sms_gateway -c "SELECT setting_key, setting_value FROM system_settings LIMIT 5;"
+docker exec postgres psql -U postgres -h localhost -p 6432 -d sms_bridge -c "SELECT setting_key, setting_value FROM system_settings LIMIT 5;"
 ```
 
 #### 5. Redis Connectivity Test
@@ -213,9 +213,9 @@ done
 
 # Check if messages were processed
 echo "Checking processed messages..."
-docker exec postgres psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_input FROM input_sms;"
-docker exec postgres psql -U postgres -d sms_gateway -c "SELECT COUNT(*) as total_output FROM out_sms;"
-docker exec postgres psql -U postgres -d sms_gateway -c "SELECT overall_status, COUNT(*) FROM sms_monitor GROUP BY overall_status;"
+docker exec postgres psql -U postgres -d sms_bridge -c "SELECT COUNT(*) as total_input FROM input_sms;"
+docker exec postgres psql -U postgres -d sms_bridge -c "SELECT COUNT(*) as total_output FROM out_sms;"
+docker exec postgres psql -U postgres -d sms_bridge -c "SELECT overall_status, COUNT(*) FROM sms_monitor GROUP BY overall_status;"
 ```
 
 #### 7. Grafana Dashboard Access
@@ -251,7 +251,7 @@ docker logs grafana --tail=50
 docker stats
 
 # Restart specific service using Ansible (secure method)
-ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+ansible-playbook restart_sms_bridge.yml --ask-vault-pass
 
 # Check individual container status
 docker inspect sms_receiver
@@ -260,40 +260,40 @@ docker inspect postgres
 
 ## Deployment Management
 
-### Starting the SMS Gateway System
+### Starting the SMS Bridge System
 
 #### Using Ansible (Secure Method - Recommended)
 ```bash
 # Navigate to project directory
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
 # Start complete deployment with vault credentials
-ansible-playbook setup_sms_gateway.yml --ask-vault-pass
+ansible-playbook setup_sms_bridge.yml --ask-vault-pass
 
 # Start deployment with verbose output for debugging
-ansible-playbook setup_sms_gateway.yml --ask-vault-pass -vvv
+ansible-playbook setup_sms_bridge.yml --ask-vault-pass -vvv
 ```
 
-### Stopping the SMS Gateway System
+### Stopping the SMS Bridge System
 
 #### Using Ansible (Secure Method)
 ```bash
 # Navigate to project directory
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
-# Stop all SMS Gateway containers
-ansible-playbook stop_sms_gateway.yml
+# Stop all SMS Bridge containers
+ansible-playbook stop_sms_bridge.yml
 
-# Restart all SMS Gateway containers with vault credentials
-ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+# Restart all SMS Bridge containers with vault credentials
+ansible-playbook restart_sms_bridge.yml --ask-vault-pass
 ```
 
 #### Emergency Stop (Direct Docker - Use with Caution)
 ```bash
-# Force stop all SMS Gateway containers
+# Force stop all SMS Bridge containers
 docker stop postgres redis pgbouncer postgres_exporter redis_exporter prometheus grafana sms_receiver
 
-# Force remove all SMS Gateway containers (DESTROYS DATA)
+# Force remove all SMS Bridge containers (DESTROYS DATA)
 docker rm postgres redis pgbouncer postgres_exporter redis_exporter prometheus grafana sms_receiver
 ```
 
@@ -304,24 +304,24 @@ The project includes dedicated Ansible playbooks for secure container management
 
 ```bash
 # Navigate to project directory
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
-# Stop all SMS Gateway containers securely
-ansible-playbook stop_sms_gateway.yml
+# Stop all SMS Bridge containers securely
+ansible-playbook stop_sms_bridge.yml
 
-# Restart all SMS Gateway containers with vault credentials
-ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+# Restart all SMS Bridge containers with vault credentials
+ansible-playbook restart_sms_bridge.yml --ask-vault-pass
 ```
 
 #### Features of the Ansible Management Playbooks
 
-**Stop Playbook (`stop_sms_gateway.yml`):**
-- Gracefully stops all SMS Gateway containers using Ansible Docker modules
+**Stop Playbook (`stop_sms_bridge.yml`):**
+- Gracefully stops all SMS Bridge containers using Ansible Docker modules
 - Shows status of remaining containers for verification
 - Provides clear feedback on operation completion
 - No credential exposure in commands or logs
 
-**Restart Playbook (`restart_sms_gateway.yml`):**
+**Restart Playbook (`restart_sms_bridge.yml`):**
 - Performs complete stop and restart cycle using vault-encrypted credentials
 - Includes proper wait times for container lifecycle
 - Shows container status after restart
@@ -334,13 +334,13 @@ ansible-playbook restart_sms_gateway.yml --ask-vault-pass
 ```bash
 # === Using Ansible (Secure Method - Recommended) ===
 # Navigate to project directory first
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
-# Stop SMS Gateway system
-ansible-playbook stop_sms_gateway.yml
+# Stop SMS Bridge system
+ansible-playbook stop_sms_bridge.yml
 
-# Restart SMS Gateway system with vault credentials
-ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+# Restart SMS Bridge system with vault credentials
+ansible-playbook restart_sms_bridge.yml --ask-vault-pass
 
 # === Direct Docker Commands (Use with Caution) ===
 # Check container status
@@ -358,17 +358,17 @@ docker logs -f sms_receiver
 ```bash
 # === Secure Ansible-based Maintenance ===
 # Navigate to project directory
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
+cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
 # Restart system after configuration changes
-ansible-playbook restart_sms_gateway.yml --ask-vault-pass
+ansible-playbook restart_sms_bridge.yml --ask-vault-pass
 
 # === Direct Docker Maintenance (Use with Caution) ===
 # Clean up unused Docker resources
 docker system prune -f
 
 # Backup database before maintenance
-docker exec postgres pg_dump -U postgres sms_gateway > backup_$(date +%Y%m%d_%H%M%S).sql
+docker exec postgres pg_dump -U postgres sms_bridge > backup_$(date +%Y%m%d_%H%M%S).sql
 
 # Update individual container images
 docker pull postgres:15

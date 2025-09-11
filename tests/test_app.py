@@ -93,62 +93,6 @@ def get_onboarding_status(mobile_number):
             'error': str(e)
         }
 
-def register_mobile_onboarding(mobile_number):
-    """Register mobile number for onboarding"""
-    try:
-        payload = {
-            "mobile_number": mobile_number
-        }
-        
-        response = requests.post(
-            f"{SMS_BRIDGE_URL}/onboarding/register",
-            json=payload,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            return {
-                'success': True,
-                'data': response.json()
-            }
-        else:
-            return {
-                'success': False,
-                'error': response.text,
-                'status_code': response.status_code
-            }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': str(e)
-        }
-
-def get_onboarding_status(mobile_number):
-    """Get onboarding status for mobile number"""
-    try:
-        response = requests.get(
-            f"{SMS_BRIDGE_URL}/onboarding/status/{mobile_number}",
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            return {
-                'success': True,
-                'data': response.json()
-            }
-        else:
-            return {
-                'success': False,
-                'error': response.text,
-                'status_code': response.status_code
-            }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': str(e)
-        }
-
 @app.route('/')
 def index():
     """Main page with onboarding, single SMS form and file upload"""

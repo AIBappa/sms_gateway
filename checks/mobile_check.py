@@ -2,37 +2,35 @@ import re
 
 async def validate_mobile_check(sms, pool):
     """
-    Validates that the mobile number in SMS message exists in onboarding_mobile table.
-    Expected SMS format: HEADER MOBILE_NUMBER HASH
+    Validates that the sender mobile number exists in onboarding_mobile table.
+    Expected SMS format: ONBOARD:<hash>
+    Validation is based on the sender_number, not message content.
     
     Returns:
-    - 1: pass (mobile number found in onboarding table)
-    - 2: fail (mobile number not found or invalid format)
+    - 1: pass (sender mobile number found in onboarding table)
+    - 2: fail (sender mobile number not found or invalid)
     """
     try:
-        message_parts = sms.sms_message.strip().split()
+        sender_number = sms.sender_number.strip()
         
-        # Extract mobile number from second part of message
-        if len(message_parts) < 2:
-            return 2  # fail - insufficient parts
-        
-        mobile_number = message_parts[1]
+        # Remove any country code or special characters to get clean mobile number
+        clean_mobile = re.sub(r'^[^\d]*', '', sender_number)
         
         # Basic mobile number format validation
-        if not re.match(r'^\d{10,15}$', mobile_number):
+        if not re.match(r'^\d{10,15}$', clean_mobile):
             return 2  # fail - invalid mobile number format
         
-        # Check if mobile number exists in onboarding_mobile table and is active
+        # Check if sender mobile number exists in onboarding_mobile table and is active
         async with pool.acquire() as conn:
             exists = await conn.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM onboarding_mobile WHERE mobile_number = $1 AND is_active = true)",
-                mobile_number
+                clean_mobile
             )
         
         if exists:
             return 1  # pass
         else:
-            return 2  # fail - mobile number not found in onboarding table
+            return 2  # fail - sender mobile number not found in onboarding table
             
     except Exception as e:
         # Log error and fail safely

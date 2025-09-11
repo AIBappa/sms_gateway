@@ -6,51 +6,49 @@ import re
 async def validate_header_hash_check(sms, pool):
     """
     Combined header and hash validation check.
-    Validates SMS message format with header and hash components.
-    Expected format: HEADER MOBILE_NUMBER HASH
+    Validates SMS message format: ONBOARD:<hash>
     
     Returns:
     - 1: pass (valid header and hash)
     - 2: fail (invalid header or hash)
     """
     try:
-        message_parts = sms.sms_message.strip().split()
+        message = sms.sms_message.strip()
         
-        # Basic format validation - expect at least 3 parts (header, mobile, hash)
-        if len(message_parts) < 3:
-            return 2  # fail - insufficient parts
-        
-        header = message_parts[0]
-        mobile_number = message_parts[1]
-        provided_hash = message_parts[2]
-        
-        # Header validation - should be alphanumeric and reasonable length
-        if not re.match(r'^[A-Za-z0-9]{2,10}$', header):
+        # Check if message starts with ONBOARD: pattern
+        if not message.startswith("ONBOARD:"):
             return 2  # fail - invalid header format
         
-        # Mobile number basic format validation
-        if not re.match(r'^\d{10,15}$', mobile_number):
-            return 2  # fail - invalid mobile number format
+        # Extract hash from ONBOARD:<hash> format
+        try:
+            provided_hash = message.split("ONBOARD:", 1)[1].strip()
+        except IndexError:
+            return 2  # fail - no hash after ONBOARD:
         
-        # Hash validation
-        # Get salt from onboarding_mobile table
+        # Basic hash format validation (should be 64 character hex for SHA256)
+        if not re.match(r'^[a-fA-F0-9]{64}$', provided_hash):
+            return 2  # fail - invalid hash format
+        
+        # Get the sender's mobile number and check in onboarding table
+        sender_number = sms.sender_number.strip()
+        
+        # Remove any country code or special characters to get clean mobile number
+        clean_mobile = re.sub(r'^[^\d]*', '', sender_number)
+        
+        # Check if mobile number exists in onboarding table and get stored hash
         async with pool.acquire() as conn:
-            salt_result = await conn.fetchrow(
-                "SELECT salt FROM onboarding_mobile WHERE mobile_number = $1 AND is_active = true",
-                mobile_number
+            onboarding_result = await conn.fetchrow(
+                "SELECT hash FROM onboarding_mobile WHERE mobile_number = $1 AND is_active = true",
+                clean_mobile
             )
         
-        if not salt_result:
+        if not onboarding_result:
             return 2  # fail - mobile number not found in onboarding table
         
-        salt = salt_result['salt']
+        stored_hash = onboarding_result['hash']
         
-        # Generate expected hash using header + mobile + salt
-        data_to_hash = f"{header}{mobile_number}{salt}"
-        expected_hash = hashlib.sha256(data_to_hash.encode('utf-8')).hexdigest()
-        
-        # Compare provided hash with expected hash
-        if provided_hash.lower() != expected_hash.lower():
+        # Compare provided hash with stored hash
+        if provided_hash.lower() != stored_hash.lower():
             return 2  # fail - hash mismatch
         
         return 1  # pass - all validations successful

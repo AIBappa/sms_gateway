@@ -315,8 +315,7 @@ async def register_mobile(request: OnboardingRequest):
                     VALUES ($1, $2, $3)
                 """, mobile_number, salt, "")  # hash will be computed below
         
-        # Generate hash for demonstration (header + mobile + salt)
-        # Using "ONBOARD" header as per requirements
+        # Generate hash for onboarding (ONBOARD header + mobile + salt)
         demo_header = "ONBOARD"
         data_to_hash = f"{demo_header}{mobile_number}{salt}"
         computed_hash = hashlib.sha256(data_to_hash.encode('utf-8')).hexdigest()

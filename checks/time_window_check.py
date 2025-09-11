@@ -5,22 +5,20 @@ async def validate_time_window_check(sms, pool):
     """
     Validates time window between onboarding mobile request and SMS received time.
     Compares request_timestamp in onboarding_mobile table vs received_timestamp in input_sms.
+    Uses sender_number to find the onboarding record.
     
     Returns:
     - 1: pass (within time window)
     - 2: fail (outside time window or mobile not found)
     """
     try:
-        message_parts = sms.sms_message.strip().split()
+        sender_number = sms.sender_number.strip()
         
-        # Extract mobile number from second part of message
-        if len(message_parts) < 2:
-            return 2  # fail - insufficient parts
-        
-        mobile_number = message_parts[1]
+        # Remove any country code or special characters to get clean mobile number
+        clean_mobile = re.sub(r'^[^\d]*', '', sender_number)
         
         # Basic mobile number format validation
-        if not re.match(r'^\d{10,15}$', mobile_number):
+        if not re.match(r'^\d{10,15}$', clean_mobile):
             return 2  # fail - invalid mobile number format
         
         async with pool.acquire() as conn:
@@ -32,7 +30,7 @@ async def validate_time_window_check(sms, pool):
             # Get onboarding request timestamp for this mobile number
             onboarding_result = await conn.fetchrow(
                 "SELECT request_timestamp FROM onboarding_mobile WHERE mobile_number = $1 AND is_active = true",
-                mobile_number
+                clean_mobile
             )
         
         if not onboarding_result:

@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional
 import asyncpg
 import redis
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 import requests
 
@@ -257,15 +258,66 @@ async def startup_event():
     asyncio.create_task(batch_processor())
 
 @app.post("/sms/receive")
-async def receive_sms(sms_data: SMSInput, background_tasks: BackgroundTasks):
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO input_sms (sender_number, sms_message, received_timestamp) 
-            VALUES ($1, $2, $3)
-        """, sms_data.sender_number, sms_data.sms_message, sms_data.received_timestamp)
+async def receive_sms(request: Request, background_tasks: BackgroundTasks):
+    """
+    Handle SMS reception from both JSON and form-encoded data
+    """
+    content_type = request.headers.get("content-type", "").lower()
     
-    return {"status": "received"}
+    try:
+        if "application/json" in content_type:
+            # Handle JSON data (existing format)
+            json_data = await request.json()
+            sms_data = SMSInput(**json_data)
+        elif "application/x-www-form-urlencoded" in content_type:
+            # Handle form-encoded data from mobile app
+            form_data = await request.form()
+            logger.info(f"=== FORM DATA RECEIVED ===")
+            logger.info(f"Raw form data: {dict(form_data)}")
+            
+            # Convert form fields to expected format
+            sender_number = form_data.get("number", "")
+            sms_message = form_data.get("message", "")
+            timestamp_str = form_data.get("timestamp", "0")
+            
+            # Convert Unix timestamp (milliseconds) to datetime
+            try:
+                timestamp_ms = int(timestamp_str)
+                received_timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+            except (ValueError, TypeError):
+                received_timestamp = datetime.now(timezone.utc)
+                logger.warning(f"Invalid timestamp '{timestamp_str}', using current time")
+            
+            sms_data = SMSInput(
+                sender_number=sender_number,
+                sms_message=sms_message,
+                received_timestamp=received_timestamp
+            )
+            logger.info(f"=== CONVERTED TO SMS DATA ===")
+        else:
+            logger.error(f"Unsupported content type: {content_type}")
+            raise HTTPException(status_code=400, detail="Content-Type must be application/json or application/x-www-form-urlencoded")
+        
+        # Log the processed SMS data
+        logger.info(f"=== SMS RECEIVED ===")
+        logger.info(f"Sender Number: {sms_data.sender_number}")
+        logger.info(f"SMS Message: {sms_data.sms_message}")
+        logger.info(f"Received Timestamp: {sms_data.received_timestamp}")
+        logger.info(f"=== END SMS DATA ===")
+        
+        # Insert to database
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO input_sms (sender_number, sms_message, received_timestamp) 
+                VALUES ($1, $2, $3)
+            """, sms_data.sender_number, sms_data.sms_message, sms_data.received_timestamp)
+        
+        return {"status": "received"}
+        
+    except Exception as e:
+        logger.error(f"Error processing SMS: {e}")
+        raise HTTPException(status_code=400, detail=f"Error processing SMS: {str(e)}")
 
 @app.post("/onboarding/register", response_model=OnboardingResponse)
 async def register_mobile(request: OnboardingRequest):

@@ -420,6 +420,13 @@ docker pull grafana/grafana
    ansible-playbook ansible-k3s/setup_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
    ```
 
+   **If re-running setup after previous deployment:**
+   ```bash
+   # Remove build marker to force image rebuild with updated code
+   rm -f /home/$USER/sms_bridge/.image_built
+   ansible-playbook ansible-k3s/setup_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+   ```
+
 2. **Regular updates/new features:**
    ```bash
    ansible-playbook ansible-k3s/upgrade_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
@@ -450,3 +457,28 @@ ansible-playbook ansible-docker/stop_sms_bridge.yml
 - **Never use `setup_sms_bridge_k3s.yml` on existing systems** - it will destroy data
 - **Test in development first** using Docker scripts before applying to K3s production
 - **All scripts require vault password** except stop operations
+
+### 🔧 **Troubleshooting**
+
+#### Build Marker Issues
+If scripts fail to rebuild Docker images or apply code changes, the build marker may be preventing updates:
+
+```bash
+# Remove build marker to force complete rebuild
+rm -f /home/$USER/sms_bridge/.image_built
+
+# Then re-run the appropriate script
+ansible-playbook ansible-k3s/upgrade_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+```
+
+**When to remove the marker:**
+- SMS server fails to start with "column does not exist" errors
+- Code changes not appearing after deployment
+- Schema migrations not being applied
+- Docker image not rebuilding with latest code
+
+#### Database Schema Issues
+If the SMS receiver fails with database column errors:
+1. Check if upgrade script completed successfully
+2. Remove build marker and re-run upgrade script
+3. Verify all tables have required columns using kubectl exec

@@ -1,6 +1,5 @@
 import redis
 import os
-from .mobile_utils import get_local_mobile_number
 
 # Use the same Redis configuration as main app
 REDIS_CONFIG = {

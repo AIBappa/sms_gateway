@@ -252,12 +252,12 @@ async def batch_processor():
 
 @app.on_event("startup")
 async def startup_event():
-    # Cache warmup
+    # Cache warmup with local mobile numbers for consistency
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        numbers = await conn.fetch("SELECT sender_number FROM out_sms")
+        numbers = await conn.fetch("SELECT local_mobile FROM out_sms WHERE local_mobile IS NOT NULL")
         for row in numbers:
-            redis_client.sadd('out_sms_numbers', row['sender_number'])
+            redis_client.sadd('out_sms_numbers', row['local_mobile'])
     
     # Start batch processor
     asyncio.create_task(batch_processor())

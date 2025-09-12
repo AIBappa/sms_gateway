@@ -1,4 +1,5 @@
 import re
+from .mobile_utils import get_local_mobile_number, normalize_mobile_number
 
 async def validate_mobile_check(sms, pool):
     """
@@ -11,20 +12,21 @@ async def validate_mobile_check(sms, pool):
     - 2: fail (sender mobile number not found or invalid)
     """
     try:
-        sender_number = sms.sender_number.strip()
-        
-        # Remove any country code or special characters to get clean mobile number
-        clean_mobile = re.sub(r'^[^\d]*', '', sender_number)
+        # Use structured mobile data or fallback to normalization
+        if hasattr(sms, 'local_mobile') and sms.local_mobile:
+            local_mobile = sms.local_mobile
+        else:
+            local_mobile = await get_local_mobile_number(sms.sender_number, pool)
         
         # Basic mobile number format validation
-        if not re.match(r'^\d{10,15}$', clean_mobile):
+        if not re.match(r'^\d{10,15}$', local_mobile):
             return 2  # fail - invalid mobile number format
         
         # Check if sender mobile number exists in onboarding_mobile table and is active
         async with pool.acquire() as conn:
             exists = await conn.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM onboarding_mobile WHERE mobile_number = $1 AND is_active = true)",
-                clean_mobile
+                local_mobile
             )
         
         if exists:

@@ -24,6 +24,8 @@ class BatchSMSData(BaseModel):
     sender_number: str
     sms_message: str
     received_timestamp: datetime
+    country_code: Optional[str] = None
+    local_mobile: Optional[str] = None
 
 # New models for onboarding functionality
 class OnboardingRequest(BaseModel):
@@ -171,13 +173,13 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
             elif result == 3:  # skipped
                 continue
         
-        # Update sms_monitor
+        # Update sms_monitor with country code and local mobile
         async with pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO sms_monitor (uuid, overall_status, failed_at_check, processing_completed_at, 
                                          blacklist_check, duplicate_check, foreign_number_check, header_hash_check, 
-                                         mobile_check, time_window_check)
-                VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8, $9)
+                                         mobile_check, time_window_check, country_code, local_mobile)
+                VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (uuid) DO UPDATE SET 
                     overall_status = EXCLUDED.overall_status,
                     failed_at_check = EXCLUDED.failed_at_check,
@@ -187,16 +189,19 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
                     foreign_number_check = EXCLUDED.foreign_number_check,
                     header_hash_check = EXCLUDED.header_hash_check,
                     mobile_check = EXCLUDED.mobile_check,
-                    time_window_check = EXCLUDED.time_window_check
-            """, sms.uuid, overall_status, failed_check, *results.values())
+                    time_window_check = EXCLUDED.time_window_check,
+                    country_code = EXCLUDED.country_code,
+                    local_mobile = EXCLUDED.local_mobile
+            """, sms.uuid, overall_status, failed_check, *results.values(), sms.country_code, sms.local_mobile)
         
         if overall_status == 'valid':
-            # Insert to out_sms and Redis
+            # Insert to out_sms and Redis using structured mobile data
             async with pool.acquire() as conn:
                 await conn.execute("""
-                    INSERT INTO out_sms (uuid, sender_number, sms_message) VALUES ($1, $2, $3)
-                """, sms.uuid, sms.sender_number, sms.sms_message)
-            redis_client.sadd('out_sms_numbers', sms.sender_number)
+                    INSERT INTO out_sms (uuid, sender_number, sms_message, country_code, local_mobile) 
+                    VALUES ($1, $2, $3, $4, $5)
+                """, sms.uuid, sms.sender_number, sms.sms_message, sms.country_code, sms.local_mobile)
+            redis_client.sadd('out_sms_numbers', sms.local_mobile)
             
             # Forward to cloud backend only after validation passes
             if CF_BACKEND_URL and API_KEY:
@@ -220,7 +225,7 @@ async def batch_processor():
         
         async with pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT uuid, sender_number, sms_message, received_timestamp 
+                SELECT uuid, sender_number, sms_message, received_timestamp, country_code, local_mobile 
                 FROM input_sms 
                 WHERE uuid > $1 
                 ORDER BY uuid 
@@ -298,20 +303,26 @@ async def receive_sms(request: Request, background_tasks: BackgroundTasks):
             logger.error(f"Unsupported content type: {content_type}")
             raise HTTPException(status_code=400, detail="Content-Type must be application/json or application/x-www-form-urlencoded")
         
+        # Extract country code and local mobile for structured storage
+        from checks.mobile_utils import normalize_mobile_number
+        pool = await get_db_pool()
+        country_code, local_mobile = await normalize_mobile_number(sms_data.sender_number, pool)
+        
         # Log the processed SMS data
         logger.info(f"=== SMS RECEIVED ===")
         logger.info(f"Sender Number: {sms_data.sender_number}")
+        logger.info(f"Country Code: {country_code}")
+        logger.info(f"Local Mobile: {local_mobile}")
         logger.info(f"SMS Message: {sms_data.sms_message}")
         logger.info(f"Received Timestamp: {sms_data.received_timestamp}")
         logger.info(f"=== END SMS DATA ===")
         
-        # Insert to database
-        pool = await get_db_pool()
+        # Insert to database with structured mobile data
         async with pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO input_sms (sender_number, sms_message, received_timestamp) 
-                VALUES ($1, $2, $3)
-            """, sms_data.sender_number, sms_data.sms_message, sms_data.received_timestamp)
+                INSERT INTO input_sms (sender_number, sms_message, received_timestamp, country_code, local_mobile) 
+                VALUES ($1, $2, $3, $4, $5)
+            """, sms_data.sender_number, sms_data.sms_message, sms_data.received_timestamp, country_code, local_mobile)
         
         return {"status": "received"}
         

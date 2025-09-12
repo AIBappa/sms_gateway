@@ -29,17 +29,18 @@ async def validate_header_hash_check(sms, pool):
         if not re.match(r'^[a-fA-F0-9]{64}$', provided_hash):
             return 2  # fail - invalid hash format
         
-        # Get the sender's mobile number and check in onboarding table
-        sender_number = sms.sender_number.strip()
-        
-        # Remove any country code or special characters to get clean mobile number
-        clean_mobile = re.sub(r'^[^\d]*', '', sender_number)
+        # Use structured mobile data or fallback to normalization
+        if hasattr(sms, 'local_mobile') and sms.local_mobile:
+            local_mobile = sms.local_mobile
+        else:
+            from .mobile_utils import get_local_mobile_number
+            local_mobile = await get_local_mobile_number(sms.sender_number, pool)
         
         # Check if mobile number exists in onboarding table and get stored hash
         async with pool.acquire() as conn:
             onboarding_result = await conn.fetchrow(
                 "SELECT hash FROM onboarding_mobile WHERE mobile_number = $1 AND is_active = true",
-                clean_mobile
+                local_mobile
             )
         
         if not onboarding_result:

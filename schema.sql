@@ -128,6 +128,28 @@ ALTER TABLE sms_monitor ADD COLUMN IF NOT EXISTS header_hash_check INTEGER DEFAU
 ALTER TABLE sms_monitor DROP COLUMN IF EXISTS header_check;
 ALTER TABLE sms_monitor DROP COLUMN IF EXISTS hash_length_check;
 
+-- Add country code and local mobile columns for better data organization
+ALTER TABLE input_sms ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);
+ALTER TABLE input_sms ADD COLUMN IF NOT EXISTS local_mobile VARCHAR(15);
+ALTER TABLE sms_monitor ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);
+ALTER TABLE sms_monitor ADD COLUMN IF NOT EXISTS local_mobile VARCHAR(15);
+ALTER TABLE out_sms ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);
+ALTER TABLE out_sms ADD COLUMN IF NOT EXISTS local_mobile VARCHAR(15);
+ALTER TABLE blacklist_sms ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);
+ALTER TABLE blacklist_sms ADD COLUMN IF NOT EXISTS local_mobile VARCHAR(15);
+ALTER TABLE count_sms ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);
+ALTER TABLE count_sms ADD COLUMN IF NOT EXISTS local_mobile VARCHAR(15);
+
+-- Create indexes for the new columns
+CREATE INDEX IF NOT EXISTS idx_input_sms_country_code ON input_sms (country_code);
+CREATE INDEX IF NOT EXISTS idx_input_sms_local_mobile ON input_sms (local_mobile);
+CREATE INDEX IF NOT EXISTS idx_sms_monitor_country_code ON sms_monitor (country_code);
+CREATE INDEX IF NOT EXISTS idx_sms_monitor_local_mobile ON sms_monitor (local_mobile);
+CREATE INDEX IF NOT EXISTS idx_out_sms_country_code ON out_sms (country_code);
+CREATE INDEX IF NOT EXISTS idx_out_sms_local_mobile ON out_sms (local_mobile);
+CREATE INDEX IF NOT EXISTS idx_blacklist_country_mobile ON blacklist_sms (country_code, local_mobile);
+CREATE INDEX IF NOT EXISTS idx_count_country_mobile ON count_sms (country_code, local_mobile);
+
 -- Update check_sequence and check_enabled settings to reflect consolidated checks
 UPDATE system_settings 
 SET setting_value = '["blacklist", "duplicate", "foreign_number", "header_hash", "mobile", "time_window"]'

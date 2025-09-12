@@ -1,5 +1,6 @@
 import redis
 import os
+from .mobile_utils import get_local_mobile_number
 
 # Use the same Redis configuration as main app
 REDIS_CONFIG = {
@@ -11,6 +12,9 @@ REDIS_CONFIG = {
 redis_client = redis.StrictRedis(**REDIS_CONFIG)
 
 async def validate_duplicate_check(sms, pool):
-    if redis_client.sismember('out_sms_numbers', sms.sender_number):
+    # Use structured mobile data for duplicate tracking
+    local_mobile = sms.local_mobile if hasattr(sms, 'local_mobile') and sms.local_mobile else sms.sender_number
+    
+    if redis_client.sismember('out_sms_numbers', local_mobile):
         return 2  # fail
     return 1  # pass

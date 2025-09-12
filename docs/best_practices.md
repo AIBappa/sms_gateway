@@ -7,13 +7,8 @@ This document outlines best practices for operating and maintaining the SMS Brid
 ### Credential Management
 - Use Ansible Vault to encrypt sensitive credentials in `vault.yml`.
 - Avoid hardcoding usernames, password#### Maintenance Operations
-```bash
-# === Secure Ansible-based Maintenance ===
-# Navigate to project directory
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_gateway
-
-# Restart system after configuration changes
-ansible-playbook restart_sms_gateway.yml --ask-vault-passI keys in configuration files.
+### Credential Management
+- Use Ansible Vault to encrypt sensitive credentials and API keys in configuration files.
 - Regularly rotate credentials and update the vault file.
 
 ### Database Security
@@ -119,7 +114,7 @@ The Ansible playbook now includes automated Grafana configuration:
 - Document incident response procedures for handling breaches or failures.
 - Ensure high availability by considering load balancers and failover mechanisms for production deployments.
 
-For more details on the system setup, refer to the main Ansible playbook (`setup_sms_bridge.yml`) and configuration files.
+For more details on the system setup, refer to the Ansible playbooks in `ansible-k3s/` (production) or `ansible-docker/` (development) folders and configuration files.
 
 ## Access and Credentials
 
@@ -251,7 +246,7 @@ docker logs grafana --tail=50
 docker stats
 
 # Restart specific service using Ansible (secure method)
-ansible-playbook restart_sms_bridge.yml --ask-vault-pass
+ansible-playbook ansible-docker/restart_sms_bridge.yml --ask-vault-pass
 
 # Check individual container status
 docker inspect sms_receiver
@@ -260,118 +255,198 @@ docker inspect postgres
 
 ## Deployment Management
 
-### Starting the SMS Bridge System
+The SMS Bridge system supports two deployment methods:
+1. **K3s-based deployment** (Recommended for production)
+2. **Docker Compose deployment** (For development/testing)
 
-#### Using Ansible (Secure Method - Recommended)
+### K3s Deployment (Production - Recommended)
+
+The K3s deployment provides a complete Kubernetes-based SMS Bridge infrastructure with proper scaling, monitoring, and management capabilities.
+
+#### Available Scripts in `ansible-k3s/` folder:
+
+**Installation Scripts:**
+- `install_k3s.yml` - Install K3s Kubernetes cluster
+- `setup_sms_bridge_k3s.yml` - Complete fresh SMS Bridge deployment
+- `uninstall_k3s.yml` - Remove K3s cluster entirely
+
+**Management Scripts:**
+- `upgrade_sms_bridge_k3s.yml` - Apply code/schema updates (preserves data)
+- `restart_sms_bridge_k3s.yml` - Restart services only (no code changes)
+- `stop_sms_bridge_k3s.yml` - Complete shutdown (destroys data)
+
+#### K3s Quick Start Commands:
 ```bash
 # Navigate to project directory
 cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
-# Start complete deployment with vault credentials
-ansible-playbook setup_sms_bridge.yml --ask-vault-pass
+# 1. Install K3s cluster (one-time setup)
+ansible-playbook ansible-k3s/install_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass
 
-# Start deployment with verbose output for debugging
-ansible-playbook setup_sms_bridge.yml --ask-vault-pass -vvv
+# 2. Deploy SMS Bridge infrastructure (fresh installation)
+ansible-playbook ansible-k3s/setup_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+
+# 3. Apply updates to running system (recommended for updates)
+ansible-playbook ansible-k3s/upgrade_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+
+# 4. Restart services only (troubleshooting)
+ansible-playbook ansible-k3s/restart_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+
+# 5. Complete shutdown (destroys all data)
+ansible-playbook ansible-k3s/stop_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
 ```
 
-### Stopping the SMS Bridge System
+### Docker Compose Deployment (Development)
 
-#### Using Ansible (Secure Method)
+For development and testing, a simpler Docker Compose deployment is available.
+
+#### Available Scripts in `ansible-docker/` folder:
+
+- `setup_sms_bridge.yml` - Deploy using Docker Compose
+- `restart_sms_bridge.yml` - Restart Docker containers
+- `stop_sms_bridge.yml` - Stop Docker containers
+
+#### Docker Deployment Commands:
 ```bash
 # Navigate to project directory
 cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
-# Stop all SMS Bridge containers
-ansible-playbook stop_sms_bridge.yml
+# Deploy SMS Bridge with Docker Compose
+ansible-playbook ansible-docker/setup_sms_bridge.yml --ask-vault-pass
 
-# Restart all SMS Bridge containers with vault credentials
-ansible-playbook restart_sms_bridge.yml --ask-vault-pass
+# Restart services
+ansible-playbook ansible-docker/restart_sms_bridge.yml --ask-vault-pass
+
+# Stop services  
+ansible-playbook ansible-docker/stop_sms_bridge.yml
 ```
 
-#### Emergency Stop (Direct Docker - Use with Caution)
-```bash
-# Force stop all SMS Bridge containers
-docker stop postgres redis pgbouncer postgres_exporter redis_exporter prometheus grafana sms_receiver
+### Script Details
 
-# Force remove all SMS Bridge containers (DESTROYS DATA)
-docker rm postgres redis pgbouncer postgres_exporter redis_exporter prometheus grafana sms_receiver
-```
+#### K3s Scripts (`ansible-k3s/` folder):
 
-### Ansible-based Management Commands
+| Script | Purpose | Data Safety | Use Case |
+|--------|---------|-------------|----------|
+| `install_k3s.yml` | Install K3s cluster | ✅ Safe | One-time cluster setup |
+| `setup_sms_bridge_k3s.yml` | Fresh deployment | ⚠️ Destroys data | Initial installation |
+| `upgrade_sms_bridge_k3s.yml` | Apply updates | ✅ Preserves data | Deploy new code/schema |
+| `restart_sms_bridge_k3s.yml` | Restart pods | ✅ Safe | Troubleshooting |
+| `stop_sms_bridge_k3s.yml` | Complete shutdown | ⚠️ Destroys data | Maintenance/cleanup |
+| `uninstall_k3s.yml` | Remove K3s | ⚠️ Destroys everything | Complete removal |
 
-#### Using Pre-created Ansible Playbooks (Secure Method)
-The project includes dedicated Ansible playbooks for secure container management:
+#### Docker Scripts (`ansible-docker/` folder):
 
-```bash
-# Navigate to project directory
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
-
-# Stop all SMS Bridge containers securely
-ansible-playbook stop_sms_bridge.yml
-
-# Restart all SMS Bridge containers with vault credentials
-ansible-playbook restart_sms_bridge.yml --ask-vault-pass
-```
-
-#### Features of the Ansible Management Playbooks
-
-**Stop Playbook (`stop_sms_bridge.yml`):**
-- Gracefully stops all SMS Bridge containers using Ansible Docker modules
-- Shows status of remaining containers for verification
-- Provides clear feedback on operation completion
-- No credential exposure in commands or logs
-
-**Restart Playbook (`restart_sms_bridge.yml`):**
-- Performs complete stop and restart cycle using vault-encrypted credentials
-- Includes proper wait times for container lifecycle
-- Shows container status after restart
-- Tests health endpoint to verify SMS receiver is operational
-- All passwords remain encrypted in vault.yml
+| Script | Purpose | Data Safety | Use Case |
+|--------|---------|-------------|----------|
+| `setup_sms_bridge.yml` | Docker deployment | ⚠️ Recreates containers | Development setup |
+| `restart_sms_bridge.yml` | Restart containers | ✅ Preserves data | Development restart |
+| `stop_sms_bridge.yml` | Stop containers | ✅ Safe stop | Development shutdown |
 
 ### Quick Reference Commands
 
-#### Daily Operations
+#### K3s SMS Bridge Operations
 ```bash
-# === Using Ansible (Secure Method - Recommended) ===
 # Navigate to project directory first
 cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
 
-# Stop SMS Bridge system
-ansible-playbook stop_sms_bridge.yml
+# === Fresh Installation ===
+ansible-playbook ansible-k3s/setup_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
 
-# Restart SMS Bridge system with vault credentials
-ansible-playbook restart_sms_bridge.yml --ask-vault-pass
+# === Apply Code/Schema Updates (Recommended for updates) ===
+ansible-playbook ansible-k3s/upgrade_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
 
-# === Direct Docker Commands (Use with Caution) ===
-# Check container status
-docker ps
+# === Restart Services (No code changes) ===
+ansible-playbook ansible-k3s/restart_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
 
-# View logs from specific containers
-docker logs postgres --tail=20
-docker logs sms_receiver --tail=20
+# === Complete Shutdown ===
+ansible-playbook ansible-k3s/stop_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
 
-# Follow logs in real-time
-docker logs -f sms_receiver
+# === K3s Monitoring Commands ===
+# Check pod status
+k3s kubectl get pods -n sms-bridge
+
+# View service endpoints  
+k3s kubectl get services -n sms-bridge
+
+# Check deployment status
+k3s kubectl get deployments -n sms-bridge
+
+# View logs from specific services
+k3s kubectl logs -f deployment/sms-receiver -n sms-bridge
+k3s kubectl logs -f deployment/postgres -n sms-bridge
+
+# Access database shell
+k3s kubectl exec -it deployment/postgres -n sms-bridge -- psql -U postgres -d sms_bridge
 ```
 
 #### Maintenance Operations
 ```bash
-# === Secure Ansible-based Maintenance ===
-# Navigate to project directory
-cd /home/<user>/Documents/Software/SMS_Laptop_Setup/sms_bridge
+# === K3s Maintenance ===
+# Check cluster status
+k3s kubectl cluster-info
 
-# Restart system after configuration changes
-ansible-playbook restart_sms_bridge.yml --ask-vault-pass
+# Check node status  
+k3s kubectl get nodes
 
-# === Direct Docker Maintenance (Use with Caution) ===
+# Check all resources in SMS Bridge namespace
+k3s kubectl get all -n sms-bridge
+
+# View detailed pod information
+k3s kubectl describe pods -n sms-bridge
+
+# === Docker Maintenance ===
 # Clean up unused Docker resources
 docker system prune -f
 
-# Backup database before maintenance
-docker exec postgres pg_dump -U postgres sms_bridge > backup_$(date +%Y%m%d_%H%M%S).sql
+# Check Docker images for SMS Bridge
+docker images | grep sms_receiver
+
+# Backup database before maintenance (K3s)
+k3s kubectl exec deployment/postgres -n sms-bridge -- pg_dump -U postgres sms_bridge > backup_$(date +%Y%m%d_%H%M%S).sql
 
 # Update individual container images
 docker pull postgres:15
 docker pull redis:7-alpine
 docker pull grafana/grafana
 ```
+
+## Summary: When to Use Which Script
+
+### 🎯 **Recommended Production Workflow (K3s)**
+
+1. **First-time setup:**
+   ```bash
+   ansible-playbook ansible-k3s/install_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass
+   ansible-playbook ansible-k3s/setup_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+   ```
+
+2. **Regular updates/new features:**
+   ```bash
+   ansible-playbook ansible-k3s/upgrade_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+   ```
+
+3. **Troubleshooting/restart:**
+   ```bash
+   ansible-playbook ansible-k3s/restart_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+   ```
+
+4. **Complete shutdown:**
+   ```bash
+   ansible-playbook ansible-k3s/stop_sms_bridge_k3s.yml -i ansible-k3s/inventory.txt --ask-become-pass --ask-vault-pass
+   ```
+
+### 🧪 **Development Workflow (Docker)**
+
+Use `ansible-docker/` scripts for local development and testing:
+```bash
+ansible-playbook ansible-docker/setup_sms_bridge.yml --ask-vault-pass
+ansible-playbook ansible-docker/restart_sms_bridge.yml --ask-vault-pass
+ansible-playbook ansible-docker/stop_sms_bridge.yml
+```
+
+### ⚠️ **Critical Notes**
+
+- **Always use `upgrade_sms_bridge_k3s.yml` for code updates** - it preserves data while applying changes
+- **Never use `setup_sms_bridge_k3s.yml` on existing systems** - it will destroy data
+- **Test in development first** using Docker scripts before applying to K3s production
+- **All scripts require vault password** except stop operations

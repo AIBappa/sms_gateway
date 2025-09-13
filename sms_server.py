@@ -218,37 +218,131 @@ async def run_validation_checks(batch_sms_data: List[BatchSMSData]):
                     logger.warning(f"Cloud forwarding failed for validated SMS: {e}")
 
 async def batch_processor():
+    """
+    Advanced batch processor with timeout-based batching logic.
+    
+    Process flow:
+    1. Read batch size and timeout settings from the settings table
+    2. Query input_sms for new rows where uuid > last processed UUID
+    3. If rows < batch_size: wait for batch_timeout or more rows
+    4. Process available batch (1 to batch_size rows)
+    5. Update last processed UUID and repeat
+    """
+    logger.info("Starting advanced batch processor...")
+    
     while True:
-        pool = await get_db_pool()
-        batch_size = int(await get_setting('batch_size'))
-        last_uuid = await get_setting('last_processed_uuid')
-        
-        async with pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT uuid, sender_number, sms_message, received_timestamp, country_code, local_mobile 
-                FROM input_sms 
-                WHERE uuid > $1 
-                ORDER BY uuid 
-                LIMIT $2
-            """, last_uuid, batch_size)
-        
-        if rows:
-            # Convert UUID objects to strings for Pydantic model
-            batch_data = []
-            for row in rows:
-                row_dict = dict(row)
-                row_dict['uuid'] = str(row_dict['uuid'])  # Convert UUID to string
-                batch_data.append(BatchSMSData(**row_dict))
-            await run_validation_checks(batch_data)
+        try:
+            pool = await get_db_pool()
             
-            # Update last_processed_uuid
-            new_last_uuid = rows[-1]['uuid']
+            # Read batch size and timeout settings
+            try:
+                batch_size = int(await get_setting('batch_size'))
+                try:
+                    batch_timeout = float(await get_setting('batch_timeout'))
+                except:
+                    # Default timeout if not set
+                    batch_timeout = 2.0
+                    logger.warning(f"batch_timeout not found in settings, using default: {batch_timeout}s")
+                    # Insert default batch_timeout setting
+                    async with pool.acquire() as conn:
+                        await conn.execute("""
+                            INSERT INTO system_settings (setting_key, setting_value) 
+                            VALUES ('batch_timeout', '2.0') 
+                            ON CONFLICT (setting_key) DO UPDATE SET setting_value = '2.0'
+                        """)
+                
+                last_uuid = await get_setting('last_processed_uuid')
+            except Exception as e:
+                logger.error(f"Failed to read batch processor settings: {e}")
+                await asyncio.sleep(5)
+                continue
+            
+            logger.debug(f"Batch processor config: size={batch_size}, timeout={batch_timeout}s, last_uuid={last_uuid}")
+            
+            # Query for new rows
             async with pool.acquire() as conn:
-                await conn.execute("""
-                    UPDATE system_settings SET setting_value = $1 WHERE setting_key = 'last_processed_uuid'
-                """, str(new_last_uuid))
-        
-        await asyncio.sleep(1)  # Adjust as needed
+                rows = await conn.fetch("""
+                    SELECT uuid, sender_number, sms_message, received_timestamp, country_code, local_mobile 
+                    FROM input_sms 
+                    WHERE uuid > $1::uuid
+                    ORDER BY uuid 
+                    LIMIT $2
+                """, last_uuid, batch_size)
+            
+            initial_row_count = len(rows)
+            logger.debug(f"Found {initial_row_count} new SMS messages to process")
+            
+            # If no rows, wait and continue
+            if initial_row_count == 0:
+                logger.debug("No new SMS messages found, waiting...")
+                await asyncio.sleep(batch_timeout)
+                continue
+            
+            # If we have fewer rows than batch_size, wait for timeout
+            if initial_row_count < batch_size:
+                logger.debug(f"Only {initial_row_count}/{batch_size} rows available, starting {batch_timeout}s timeout...")
+                
+                timeout_start = asyncio.get_event_loop().time()
+                
+                # Poll during timeout period
+                while True:
+                    current_time = asyncio.get_event_loop().time()
+                    elapsed = current_time - timeout_start
+                    
+                    if elapsed >= batch_timeout:
+                        logger.debug(f"Timeout ({batch_timeout}s) reached, proceeding with {len(rows)} rows")
+                        break
+                    
+                    # Check for new rows during timeout
+                    async with pool.acquire() as conn:
+                        updated_rows = await conn.fetch("""
+                            SELECT uuid, sender_number, sms_message, received_timestamp, country_code, local_mobile 
+                            FROM input_sms 
+                            WHERE uuid > $1::uuid
+                            ORDER BY uuid 
+                            LIMIT $2
+                        """, last_uuid, batch_size)
+                    
+                    if len(updated_rows) >= batch_size:
+                        logger.debug(f"Batch size ({batch_size}) reached during timeout, proceeding immediately")
+                        rows = updated_rows
+                        break
+                    elif len(updated_rows) > len(rows):
+                        logger.debug(f"New SMS arrived during timeout: {len(updated_rows)} total")
+                        rows = updated_rows
+                    
+                    # Short sleep to avoid tight polling
+                    await asyncio.sleep(0.1)
+            
+            # Process the batch if we have any rows
+            if rows:
+                logger.info(f"Processing batch of {len(rows)} SMS messages")
+                
+                # Convert UUID objects to strings for Pydantic model
+                batch_data = []
+                for row in rows:
+                    row_dict = dict(row)
+                    row_dict['uuid'] = str(row_dict['uuid'])  # Convert UUID to string
+                    batch_data.append(BatchSMSData(**row_dict))
+                
+                # Run validation checks
+                await run_validation_checks(batch_data)
+                
+                # Update last_processed_uuid to the highest UUID in this batch
+                new_last_uuid = rows[-1]['uuid']
+                async with pool.acquire() as conn:
+                    await conn.execute("""
+                        UPDATE system_settings SET setting_value = $1 WHERE setting_key = 'last_processed_uuid'
+                    """, str(new_last_uuid))
+                
+                logger.info(f"Batch processing completed. Updated last_processed_uuid to: {new_last_uuid}")
+            
+            # Brief pause before next iteration
+            await asyncio.sleep(0.1)
+            
+        except Exception as e:
+            logger.error(f"Error in batch processor: {e}")
+            await asyncio.sleep(5)  # Wait longer on error
 
 @app.on_event("startup")
 async def startup_event():
@@ -378,8 +472,17 @@ async def register_mobile(request: OnboardingRequest):
                     VALUES ($1, $2, $3)
                 """, mobile_number, salt, "")  # hash will be computed below
         
-        # Generate hash for onboarding (ONBOARD header + mobile + salt)
-        demo_header = "ONBOARD"
+        # Get permitted header from settings (use first one for generation)
+        async with pool.acquire() as conn:
+            permitted_headers_str = await conn.fetchval(
+                "SELECT setting_value FROM system_settings WHERE setting_key = 'permitted_headers'"
+            )
+        
+        if not permitted_headers_str:
+            raise HTTPException(status_code=500, detail="No permitted headers configured in system settings")
+        
+        # Use the first permitted header for hash generation
+        demo_header = permitted_headers_str.split(',')[0].strip()
         data_to_hash = f"{demo_header}{mobile_number}{salt}"
         computed_hash = hashlib.sha256(data_to_hash.encode('utf-8')).hexdigest()
         
@@ -390,7 +493,7 @@ async def register_mobile(request: OnboardingRequest):
                 computed_hash, mobile_number
             )
         
-        message = f"ONBOARD:{computed_hash}"
+        message = f"{demo_header}:{computed_hash}"
         
         return OnboardingResponse(
             mobile_number=mobile_number,

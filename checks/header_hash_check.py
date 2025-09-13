@@ -6,7 +6,7 @@ import re
 async def validate_header_hash_check(sms, pool):
     """
     Combined header and hash validation check.
-    Validates SMS message format: ONBOARD:<hash>
+    Validates SMS message format: <PERMITTED_HEADER>:<hash>
     
     Returns:
     - 1: pass (valid header and hash)
@@ -15,15 +15,34 @@ async def validate_header_hash_check(sms, pool):
     try:
         message = sms.sms_message.strip()
         
-        # Check if message starts with ONBOARD: pattern
-        if not message.startswith("ONBOARD:"):
+        # Get permitted headers from settings
+        async with pool.acquire() as conn:
+            permitted_headers_str = await conn.fetchval(
+                "SELECT setting_value FROM system_settings WHERE setting_key = 'permitted_headers'"
+            )
+        
+        if not permitted_headers_str:
+            return 2  # fail - no permitted headers configured
+        
+        # Parse permitted headers (comma-separated list)
+        permitted_headers = [h.strip() for h in permitted_headers_str.split(',')]
+        
+        # Check if message starts with any permitted header pattern
+        header_found = None
+        for header in permitted_headers:
+            header_pattern = f"{header}:"
+            if message.startswith(header_pattern):
+                header_found = header
+                break
+        
+        if not header_found:
             return 2  # fail - invalid header format
         
-        # Extract hash from ONBOARD:<hash> format
+        # Extract hash from <HEADER>:<hash> format
         try:
-            provided_hash = message.split("ONBOARD:", 1)[1].strip()
+            provided_hash = message.split(f"{header_found}:", 1)[1].strip()
         except IndexError:
-            return 2  # fail - no hash after ONBOARD:
+            return 2  # fail - no hash after header
         
         # Basic hash format validation (should be 64 character hex for SHA256)
         if not re.match(r'^[a-fA-F0-9]{64}$', provided_hash):

@@ -482,3 +482,163 @@ If the SMS receiver fails with database column errors:
 1. Check if upgrade script completed successfully
 2. Remove build marker and re-run upgrade script
 3. Verify all tables have required columns using kubectl exec
+
+### 🔍 **Investigation & Debugging**
+
+#### SMS Processing Investigation
+
+**Check SMS Reception and Processing:**
+```bash
+# Monitor real-time logs from SMS receiver
+kubectl logs -n sms-bridge deployment/sms-receiver --tail=20 -f
+
+# Check specific SMS in input_sms table
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT uuid, sender_number, sms_message, received_timestamp FROM input_sms WHERE sender_number LIKE '%PHONE_NUMBER%' ORDER BY received_timestamp DESC;"
+
+# Check SMS processing status in sms_monitor
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT uuid, overall_status, failed_at_check, processing_completed_at FROM sms_monitor WHERE uuid IN (SELECT uuid FROM input_sms WHERE sender_number LIKE '%PHONE_NUMBER%');"
+
+# Check if SMS made it to out_sms table
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT uuid, sender_number, sms_message FROM out_sms WHERE sender_number LIKE '%PHONE_NUMBER%';"
+```
+
+**Check for Duplicate SMS Detection:**
+```bash
+# Check Redis out_sms_numbers set (duplicate prevention)
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a \
+  $(kubectl get secret sms-bridge-secrets -n sms-bridge -o jsonpath='{.data.redis-password}' | base64 -d) \
+  SMEMBERS out_sms_numbers
+
+# Check if specific number is in duplicate prevention set
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a \
+  $(kubectl get secret sms-bridge-secrets -n sms-bridge -o jsonpath='{.data.redis-password}' | base64 -d) \
+  SISMEMBER out_sms_numbers "PHONE_NUMBER"
+```
+
+#### Batch Processor Debugging
+
+**Check Batch Processing Settings:**
+```bash
+# View current batch processor configuration
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('batch_size', 'batch_timeout', 'last_processed_uuid', 'permitted_headers') ORDER BY setting_key;"
+```
+
+**Reset Batch Processing (if stuck):**
+```bash
+# Reset last_processed_uuid to reprocess all SMS
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "UPDATE system_settings SET setting_value = '00000000-0000-0000-0000-000000000000' WHERE setting_key = 'last_processed_uuid';"
+
+# Check batch processor logs
+kubectl logs -n sms-bridge deployment/sms-receiver | grep -i "batch\|processing\|timeout"
+```
+
+#### Network Traffic Monitoring
+
+**Monitor SMS Traffic with tcpdump:**
+```bash
+# Basic traffic monitoring on SMS port (30080)
+sudo tcpdump -i any -n port 30080
+
+# Detailed HTTP content capture (shows actual SMS data)
+sudo tcpdump -i any -n -A -s 0 'port 30080 and (((ip[2:2] - ((ip[0]&0xf)<<2)) - ((tcp[12]&0xf0)>>2)) != 0)'
+
+# Monitor specific IP (e.g., mobile device)
+sudo tcpdump -i any -n -A host 192.168.1.27 and port 30080
+```
+
+#### Database Deep Dive
+
+**Check Complete SMS Processing Pipeline:**
+```bash
+# Full SMS processing trace for specific UUID
+SMS_UUID="YOUR_SMS_UUID_HERE"
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT 'input_sms' as table_name, uuid, sender_number, sms_message, received_timestamp, country_code, local_mobile FROM input_sms WHERE uuid = '$SMS_UUID'
+   UNION ALL
+   SELECT 'sms_monitor' as table_name, uuid::text, overall_status, failed_at_check, processing_completed_at::text, '' as country_code, '' as local_mobile FROM sms_monitor WHERE uuid = '$SMS_UUID'
+   UNION ALL  
+   SELECT 'out_sms' as table_name, uuid::text, sender_number, sms_message, '' as received_timestamp, country_code, local_mobile FROM out_sms WHERE uuid = '$SMS_UUID';"
+
+# Check onboarding records for mobile number
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT mobile_number, salt, hash, request_timestamp, is_active FROM onboarding_mobile WHERE mobile_number = 'PHONE_NUMBER';"
+
+# View recent SMS processing activity
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT i.uuid, i.sender_number, i.sms_message, i.received_timestamp, m.overall_status, m.failed_at_check 
+   FROM input_sms i 
+   LEFT JOIN sms_monitor m ON i.uuid = m.uuid 
+   ORDER BY i.received_timestamp DESC LIMIT 10;"
+```
+
+#### System Health Checks
+
+**Verify All Services are Running:**
+```bash
+# Check all pods status
+kubectl get pods -n sms-bridge
+
+# Check services and ports
+kubectl get services -n sms-bridge
+
+# Check deployment status
+kubectl get deployments -n sms-bridge
+
+# Check for any failing pods
+kubectl get pods -n sms-bridge | grep -v Running
+```
+
+**Check Resource Usage:**
+```bash
+# Pod resource usage
+kubectl top pods -n sms-bridge
+
+# Node resource usage
+kubectl top nodes
+
+# Check pod logs for errors
+kubectl logs -n sms-bridge deployment/sms-receiver --previous
+```
+
+#### Configuration Validation
+
+**Verify Settings and Secrets:**
+```bash
+# Check all system settings
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT setting_key, setting_value FROM system_settings ORDER BY setting_key;"
+
+# Verify secrets are properly configured
+kubectl get secrets -n sms-bridge
+kubectl describe secret sms-bridge-secrets -n sms-bridge
+
+# Check environment variables in SMS receiver pod
+kubectl exec -n sms-bridge deployment/sms-receiver -- env | grep -E "POSTGRES|REDIS|CF_|HASH"
+```
+
+#### Common Issue Patterns
+
+**Form Parsing Errors:**
+- Look for "python-multipart" errors in logs
+- Indicates missing dependency in Docker image
+
+**UUID Comparison Issues:**
+- Check if `last_processed_uuid` is preventing new SMS processing
+- Reset UUID to `00000000-0000-0000-0000-000000000000` if needed
+
+**Duplicate Detection:**
+- SMS failing at "duplicate" check means mobile number already processed
+- Check Redis `out_sms_numbers` set for existing numbers
+
+**Header Validation Failures:**
+- Verify `permitted_headers` setting contains expected headers (e.g., "ONBOARD")
+- Check SMS message format matches `HEADER:hash` pattern
+
+**Database Connection Issues:**
+- Verify PgBouncer is running and accessible
+- Check PostgreSQL pod logs for connection errors

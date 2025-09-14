@@ -13,3 +13,6 @@ docs/REORGANIZATION_SUMMARY.md
 docs/CLEANUP_COMPLETE.md
 docs/prompt1.md
 docs/prompt2.md
+
+#Ignore log
+*.log

@@ -94,6 +94,231 @@ The Ansible playbook now includes automated Grafana configuration:
 - Store backups in persistent volumes or external storage.
 - Use `redis-cli` commands for manual backups if needed.
 
+## Redis Cache Management
+
+### Viewing Redis Cache Contents
+
+#### Docker Deployment - View Cache Contents
+```bash
+# Get Redis password from vault
+REDIS_PASSWORD=$(ansible-vault view vault.yml | grep redis_password | cut -d':' -f2 | tr -d ' ')
+
+# Connect to Redis and view all keys
+docker exec redis redis-cli -a $REDIS_PASSWORD KEYS "*"
+
+# View SMS numbers cache (main cache for duplicate prevention)
+docker exec redis redis-cli -a $REDIS_PASSWORD SMEMBERS out_sms_numbers
+
+# View cache statistics
+docker exec redis redis-cli -a $REDIS_PASSWORD INFO
+
+# Check specific key type and value
+docker exec redis redis-cli -a $REDIS_PASSWORD TYPE out_sms_numbers
+docker exec redis redis-cli -a $REDIS_PASSWORD SCARD out_sms_numbers  # Count members in set
+```
+
+#### K3s Deployment - View Cache Contents
+```bash
+# Get Redis password from Kubernetes secret
+REDIS_PASSWORD=$(kubectl get secret sms-bridge-secrets -n sms-bridge -o jsonpath='{.data.redis-password}' | base64 -d)
+
+# Connect to Redis pod and view all keys
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD KEYS "*"
+
+# View SMS numbers cache
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SMEMBERS out_sms_numbers
+
+# View cache statistics
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD INFO
+
+# Check specific key details
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD TYPE out_sms_numbers
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SCARD out_sms_numbers
+```
+
+### Manual Redis Cache Cleaning and Updates
+
+#### Clear Entire Cache (Use with Caution)
+```bash
+# Docker deployment
+docker exec redis redis-cli -a $REDIS_PASSWORD FLUSHALL
+
+# K3s deployment
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD FLUSHALL
+```
+
+#### Remove Specific Mobile Numbers from Cache
+```bash
+# Remove single number from duplicate prevention cache
+MOBILE_NUMBER="9699511296"
+
+# Docker
+docker exec redis redis-cli -a $REDIS_PASSWORD SREM out_sms_numbers $MOBILE_NUMBER
+
+# K3s
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SREM out_sms_numbers $MOBILE_NUMBER
+```
+
+#### Bulk Remove Multiple Numbers
+```bash
+# Remove multiple numbers at once
+MOBILE_NUMBERS="9699511296 9876543210 9123456789"
+
+# Docker
+for number in $MOBILE_NUMBERS; do
+  docker exec redis redis-cli -a $REDIS_PASSWORD SREM out_sms_numbers $number
+done
+
+# K3s
+for number in $MOBILE_NUMBERS; do
+  kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SREM out_sms_numbers $number
+done
+```
+
+#### Add Numbers to Cache Manually
+```bash
+# Add single number to cache (useful for testing)
+MOBILE_NUMBER="9699511296"
+
+# Docker
+docker exec redis redis-cli -a $REDIS_PASSWORD SADD out_sms_numbers $MOBILE_NUMBER
+
+# K3s
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SADD out_sms_numbers $MOBILE_NUMBER
+```
+
+### Redis Cache Maintenance and Troubleshooting
+
+#### Check Cache Consistency with Database
+```bash
+# Compare Redis cache with database out_sms table
+echo "=== Database SMS Numbers ==="
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT DISTINCT local_mobile FROM out_sms ORDER BY local_mobile;"
+
+echo "=== Redis Cache Contents ==="
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SMEMBERS out_sms_numbers | sort
+```
+
+#### Rebuild Cache from Database (if cache is corrupted)
+```bash
+# Clear current cache
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD DEL out_sms_numbers
+
+# Rebuild from database
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT DISTINCT local_mobile FROM out_sms;" | tail -n +3 | head -n -2 | \
+  xargs -I {} kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SADD out_sms_numbers {}
+```
+
+#### Monitor Cache Performance
+```bash
+# View cache hit/miss statistics
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD INFO stats | grep -E "keyspace_hits|keyspace_misses"
+
+# Calculate hit rate
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD INFO stats | \
+  awk '/keyspace_hits/{hits=$2} /keyspace_misses/{misses=$2} END{total=hits+misses; if(total>0) print "Hit Rate:", (hits/total)*100 "%"}'
+```
+
+#### Redis Memory Management
+```bash
+# Check memory usage
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD INFO memory | grep -E "used_memory|used_memory_human"
+
+# View largest keys (potential memory hogs)
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD --bigkeys
+
+# Check memory fragmentation
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD INFO memory | grep -E "mem_fragmentation_ratio"
+```
+
+#### Redis Connectivity and Health Checks
+```bash
+# Test basic connectivity
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD PING
+
+# Check connected clients
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD INFO clients | grep connected_clients
+
+# View slow queries (if any)
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SLOWLOG GET 10
+
+# Check for blocked clients
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD CLIENT LIST | grep -c "flags=b"
+```
+
+### Advanced Redis Operations
+
+#### Export Cache Contents for Backup/Analysis
+```bash
+# Export all cache contents to file
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD --scan --pattern "*" > redis_keys_backup.txt
+
+# Export SMS numbers specifically
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SMEMBERS out_sms_numbers > sms_numbers_backup.txt
+```
+
+#### Import Cache Contents from Backup
+```bash
+# Import SMS numbers from backup file
+kubectl exec -n sms-bridge deployment/redis -- bash -c "
+REDIS_PASSWORD=\$(cat /run/secrets/redis-password)
+cat /tmp/sms_numbers_backup.txt | xargs -I {} redis-cli -a \$REDIS_PASSWORD SADD out_sms_numbers {}
+"
+```
+
+#### Redis Configuration Inspection
+```bash
+# View current Redis configuration
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD CONFIG GET "*"
+
+# Check specific configuration values
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD CONFIG GET maxmemory
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD CONFIG GET tcp-keepalive
+```
+
+### Common Redis Issues and Solutions
+
+#### Cache Inconsistency Issues
+**Problem**: Redis cache doesn't match database contents
+**Solution**:
+```bash
+# Rebuild cache from database
+kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT string_agg(DISTINCT local_mobile, ' ') FROM out_sms;" | \
+  xargs kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD DEL out_sms_numbers && \
+  kubectl exec -n sms-bridge deployment/postgres -- psql -U postgres -d sms_bridge -c \
+  "SELECT DISTINCT local_mobile FROM out_sms;" | tail -n +3 | head -n -2 | \
+  xargs -I {} kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD SADD out_sms_numbers {}
+```
+
+#### Memory Issues
+**Problem**: Redis using too much memory
+**Solution**:
+```bash
+# Check memory usage and largest keys
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD INFO memory
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD --bigkeys
+
+# If needed, clear old/unused data (be careful!)
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a $REDIS_PASSWORD DEL out_sms_numbers
+```
+
+#### Connection Issues
+**Problem**: SMS receiver can't connect to Redis
+**Solution**:
+```bash
+# Check Redis connectivity from SMS receiver
+kubectl exec -n sms-bridge deployment/sms-receiver -- redis-cli -h redis -a $REDIS_PASSWORD PING
+
+# Check Redis pod status
+kubectl get pods -n sms-bridge | grep redis
+
+# View Redis logs
+kubectl logs -n sms-bridge deployment/redis --tail=20
+```
+
 ### General Backup Guidelines
 - Automate backups using cron jobs or Ansible playbooks.
 - Encrypt backups to protect sensitive data.
@@ -189,6 +414,17 @@ docker exec postgres psql -U postgres -h localhost -p 6432 -d sms_bridge -c "SEL
 # Note: You'll need to get the Redis password from vault manually
 echo "Use 'ansible-vault view vault.yml' to get redis_password, then:"
 echo "docker exec redis redis-cli -a <redis_password> SMEMBERS out_sms_numbers"
+
+# Alternative: Get password and test in one command
+REDIS_PASSWORD=$(ansible-vault view vault.yml | grep redis_password | cut -d':' -f2 | tr -d ' ')
+docker exec redis redis-cli -a $REDIS_PASSWORD SMEMBERS out_sms_numbers
+
+# Check Redis connectivity and basic info
+docker exec redis redis-cli -a $REDIS_PASSWORD INFO | head -20
+
+# Test cache operations
+docker exec redis redis-cli -a $REDIS_PASSWORD SCARD out_sms_numbers  # Count cached numbers
+docker exec redis redis-cli -a $REDIS_PASSWORD SISMEMBER out_sms_numbers "9699511296"  # Check specific number
 ```
 
 #### 6. SMS Processing Workflow Test
@@ -516,6 +752,11 @@ kubectl exec -n sms-bridge deployment/redis -- redis-cli -a \
 kubectl exec -n sms-bridge deployment/redis -- redis-cli -a \
   $(kubectl get secret sms-bridge-secrets -n sms-bridge -o jsonpath='{.data.redis-password}' | base64 -d) \
   SISMEMBER out_sms_numbers "PHONE_NUMBER"
+
+# View Redis cache statistics
+kubectl exec -n sms-bridge deployment/redis -- redis-cli -a \
+  $(kubectl get secret sms-bridge-secrets -n sms-bridge -o jsonpath='{.data.redis-password}' | base64 -d) \
+  INFO | grep -E "connected_clients|used_memory|keyspace"
 ```
 
 #### Batch Processor Debugging

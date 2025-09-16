@@ -65,6 +65,8 @@
         name:
           - kubernetes
           - pyyaml
+          - openshift
+          - jsonpatch
         state: present
         extra_args: --user
       become: no

@@ -30,23 +30,7 @@ Kubernetes-based deployment using K3s and `kubernetes.core` Ansible collection
 
 The idea is that older mobiles act as SMS receivers and the laptop aggregates all received SMSes in a PostgreSQL database. Duplicate SMSes are filtered and only unique SMS numbers are forwarded to the cloud database (example uses Cloudflare D1).
 
-This method can verify mobile numbers that have been written to D1 via IP input. Users can send SMS to older mobile numbers to confirm their mobile numbers after submitting an onboarding application via IP/Ethernet network.
-
-## Quick Start
-
-### Choose Your Deployment Method
-
-**For Development/Testing (Docker):**
-```bash
-cd ansible-docker
-ansible-playbook -i inventory.txt setup_sms_bridge.yml --ask-vault-pass
-```
-
-**For Production (K3s):**
-```bash
-cd ansible-k3s
-ansible-playbook -i inventory.txt setup_sms_bridge_k3s.yml --ask-vault-pass
-```
+This method can verify mobile numbers that have been written to Cloudflare D1 via IP input. Users can send SMS to older mobile numbers to confirm their mobile numbers after submitting an onboarding application via IP/Ethernet network.
 
 ## Deployment Options
 
@@ -68,8 +52,8 @@ Both methods deploy identical infrastructure with the same services and capabili
 
 ## Prerequisites
 
-### Common Requirements
-- Linux laptop (tested on Ubuntu/Debian)
+### Common Requirements for both Methods of Deployment
+- Linux laptop (tested on Ubuntu/Debian) or WSL environment
 - Ansible installed
 - Git (for cloning)
 
@@ -79,8 +63,10 @@ Both methods deploy identical infrastructure with the same services and capabili
 
 ### For K3s Deployment  
 - `kubernetes.core` and `community.general` Ansible collections
-- Python kubernetes library
+   - This can be installed with `ansible-galaxy collection install kubernetes.core:1.2.1 community.general:3.8.1`
+- Python kubernetes library (These are installed via install_k3s.yml)
 - Docker or Buildah (for building container images)
+   - Note: Docker can be installed with `sudo apt install docker.io`
 
 ## Quick Start
 
@@ -92,13 +78,11 @@ ansible-playbook -i inventory.txt setup_sms_bridge.yml --ask-vault-pass
 
 ### Option 2: K3s Deployment
 ```bash
-# Step 1: Install K3s (one-time, requires sudo)
-cd ansible-k3s
-ansible-playbook -i inventory.txt install_k3s.yml
+# Step 1: Install K3s (one-time, requires sudo, run from project root, verbose output)
+ansible-playbook -i ansible-k3s/inventory.txt ansible-k3s/install_k3s.yml --ask-become-pass -vvv
 
-# Step 2: Deploy SMS Bridge (vault password only, run from project root)
-cd ..  # Back to project root
-ansible-playbook -i ansible-k3s/inventory.txt ansible-k3s/setup_sms_bridge_k3s.yml --ask-vault-pass
+# Step 2: Deploy SMS Bridge (vault password only, run from project root, verbose output)
+ansible-playbook -i ansible-k3s/inventory.txt ansible-k3s/setup_sms_bridge_k3s.yml --ask-vault-pass --ask-become-pass -vvv
 ```
 
 ## Setup Steps
@@ -124,9 +108,9 @@ Both deployment methods provide access to:
 
 ## Mobile Setup Required
 
-- Install SMS_Bridge app on older Android devices
+- Install SMS_Gateway app on older Android devices
 - May require rooted device or developer mode
-- Configure to send SMSes to laptop endpoint
+- Configure to send SMSes to laptop endpoint. This endpoint is noted in sms_server.py.
 
 ## Planned Updates
 

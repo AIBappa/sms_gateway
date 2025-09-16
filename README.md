@@ -63,10 +63,9 @@ Both methods deploy identical infrastructure with the same services and capabili
 
 ### For K3s Deployment  
 - `kubernetes.core` and `community.general` Ansible collections
-   - This can be installed with `ansible-galaxy collection install kubernetes.core:1.2.1 community.general:3.8.1`
-- Python kubernetes library (These are installed via install_k3s.yml)
+   - This can be installed with bash command :> `ansible-galaxy collection install kubernetes.core:1.2.1 community.general:3.8.1`
 - Docker or Buildah (for building container images)
-   - Note: Docker can be installed with `sudo apt install docker.io`
+   - Note: Docker can be installed with bash command:> `sudo apt install docker.io`
 
 ## Quick Start
 

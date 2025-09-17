@@ -9,7 +9,6 @@ from typing import List, Dict, Optional
 import asyncpg
 import redis
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-from fastapi.routing import APIRoute
 from pydantic import BaseModel
 import requests
 

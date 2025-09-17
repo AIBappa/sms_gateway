@@ -8,12 +8,13 @@ This setup enables two-way communication between your local K3s instance and the
 
 1.  **Inbound Traffic (CF Hono Backend -> Local K3s):**
     *   The Cloudflare Tunnel securely exposes your local `sms_receiver` service to the internet.
-    *   Your Cloudflare Worker at `http://geoprasidh-backend.jadhavshantanu.workers.dev/` can send HTTP requests to the public tunnel hostname (e.g., `https://sms.example.com`).
+    *   Your Cloudflare Worker at `https://validation.new-username.workers.dev/` can send requests to the public tunnel hostname (e.g., `https://sms.example.com`).
+    *   **Use Case 1 (Onboarding - GET Hash):** The Hono backend sends a `GET` request to `https://sms.example.com/onboard/register?mobile_number=...` to retrieve a hash for a new mobile number. The tunnel forwards this to your local `sms_server`. This is exactly how the local test app works, but over the internet.
+    *   **Use Case 2 (Receiving SMS - POST Data):** After a user is onboarded, the backend can `POST` SMS data to `https://sms.example.com/sms/receive`.
     *   `cloudflared` receives this traffic and forwards it to the internal K3s service (`http://sms-receiver.sms-bridge.svc.cluster.local:8080`).
-    *   This is used for receiving data from the Cloudflare backend.
 
 2.  **Outbound Traffic (Local K3s -> CF Hono Backend):**
-    *   The `sms_server.py` application can make direct outbound HTTP requests to `http://geoprasidh-backend.jadhavshantanu.workers.dev/`.
+    *   The `sms_server.py` application can make direct outbound HTTP requests to `https://validation.new-username.workers.dev/sms-gateway`.
     *   This does **not** go through the tunnel. It is a standard egress connection from your K3s cluster to the public internet.
     *   This is used for sending validated SMS data or status updates from your local instance back to the Cloudflare backend.
     *   The `cf_backend_url` in your `vault.yml` should be set to this URL.

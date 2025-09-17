@@ -5,10 +5,12 @@ tunnel: <TUNNEL-UUID>
 credentials-file: /etc/cloudflared/credentials-file.json
 
 ingress:
-  - hostname: sms.example.com
-    service: http://host.docker.internal:8080 # Docker desktop host mapping to container host
+  # This single rule handles all traffic for the hostname and forwards it to the K3s service.
+  # The service itself (sms_server.py) is responsible for routing different paths like /onboard/register and /sms/receive.
   - hostname: sms-k3s.example.com
-    service: http://sms-receiver.sms-bridge.svc.cluster.local:8080 # K3s internal service
+    service: http://sms-receiver.sms-bridge.svc.cluster.local:8080
+  
+  # Fallback for any other requests that don't match a hostname
   - service: http_status:404
 
 # Optional: metrics and logging

@@ -7,7 +7,7 @@
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            max-width: 900px;
+            max-width: 800px;
             margin: 0 auto;
             padding: 20px;
             background-color: #f5f5f5;
@@ -131,15 +131,36 @@
         .copy-btn {
             background-color: #28a745;
             color: white;
-            padding: 5px 10px;
+            padding: 8px 12px;
             border: none;
             border-radius: 3px;
             cursor: pointer;
             font-size: 12px;
-            margin-top: 10px;
+            margin: 5px 5px 0 0;
+            display: inline-block;
         }
         .copy-btn:hover {
             background-color: #218838;
+        }
+        .sms-btn {
+            background-color: #17a2b8;
+            color: white;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            margin: 5px 5px 0 0;
+            display: inline-block;
+            text-decoration: none;
+        }
+        .sms-btn:hover {
+            background-color: #138496;
+            text-decoration: none;
+            color: white;
+        }
+        .button-group {
+            margin-top: 10px;
         }
         .navigation {
             text-align: center;
@@ -212,17 +233,20 @@
                     <tr>
                         <th>SMS to Send:</th>
                         <td>
-                            <div class="hash-display">{{ sms_message }}</div>
-                            <button class="copy-btn" onclick="copyToClipboard('{{ sms_message }}')">Copy SMS</button>
+                            <div class="hash-display" id="sms-message">{{ sms_message }}</div>
+                            <div class="button-group">
+                                <button class="copy-btn" onclick="copyToClipboard('{{ sms_message|e }}')">📋 Copy SMS</button>
+                                <a href="sms:?body={{ sms_message|urlencode }}" class="sms-btn">📱 Send SMS</a>
+                            </div>
                         </td>
                     </tr>
                 </table>
                 <p><strong>Instructions:</strong></p>
                 <ol>
-                    <li>Copy the SMS message above</li>
-                    <li>Go to the SMS Testing page</li>
-                    <li>Paste the message and send it with your mobile number as sender</li>
-                    <li>Check the validation results</li>
+                    <li><strong>Option 1 - Mobile Device:</strong> Click "📱 Send SMS" to open your SMS app with the message pre-filled</li>
+                    <li><strong>Option 2 - Manual:</strong> Click "📋 Copy SMS" and paste it in the SMS Testing page</li>
+                    <li>Send the SMS with your mobile number as the sender</li>
+                    <li>Check the validation results in the SMS Testing page or database</li>
                 </ol>
             </div>
             {% endif %}
@@ -309,24 +333,91 @@
 
     <script>
         function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(function() {
-                alert('SMS message copied to clipboard!');
-            }, function(err) {
-                console.error('Could not copy text: ', err);
-                // Fallback for older browsers
-                var textArea = document.createElement("textarea");
-                textArea.value = text;
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                    alert('SMS message copied to clipboard!');
-                } catch (err) {
-                    alert('Failed to copy. Please copy manually.');
+            // Modern browsers with clipboard API
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(function() {
+                    showCopySuccess();
+                }, function(err) {
+                    console.error('Clipboard API failed: ', err);
+                    fallbackCopyTextToClipboard(text);
+                });
+            } else {
+                // Fallback for older browsers or non-HTTPS
+                fallbackCopyTextToClipboard(text);
+            }
+        }
+
+        function fallbackCopyTextToClipboard(text) {
+            var textArea = document.createElement("textarea");
+            textArea.value = text;
+            
+            // Avoid scrolling to bottom
+            textArea.style.top = "0";
+            textArea.style.left = "0";
+            textArea.style.position = "fixed";
+            textArea.style.opacity = "0";
+            
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            
+            try {
+                var successful = document.execCommand('copy');
+                if (successful) {
+                    showCopySuccess();
+                } else {
+                    showCopyError();
                 }
-                document.body.removeChild(textArea);
-            });
+            } catch (err) {
+                console.error('Fallback copy failed: ', err);
+                showCopyError();
+            }
+            
+            document.body.removeChild(textArea);
+        }
+
+        function showCopySuccess() {
+            // Change button text temporarily
+            var btn = event.target;
+            var originalText = btn.innerHTML;
+            btn.innerHTML = '✅ Copied!';
+            btn.style.backgroundColor = '#28a745';
+            
+            setTimeout(function() {
+                btn.innerHTML = originalText;
+                btn.style.backgroundColor = '#28a745';
+            }, 2000);
+        }
+
+        function showCopyError() {
+            alert('Copy failed. Please select and copy the text manually.');
+        }
+
+        // Add click handler to SMS message div for easy selection
+        document.addEventListener('DOMContentLoaded', function() {
+            var smsMessageDiv = document.getElementById('sms-message');
+            if (smsMessageDiv) {
+                smsMessageDiv.addEventListener('click', function() {
+                    selectText(this);
+                });
+                smsMessageDiv.style.cursor = 'pointer';
+                smsMessageDiv.title = 'Click to select text';
+            }
+        });
+
+        function selectText(element) {
+            var range, selection;
+            if (window.getSelection && document.createRange) {
+                selection = window.getSelection();
+                range = document.createRange();
+                range.selectNodeContents(element);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            } else if (document.selection && document.body.createTextRange) {
+                range = document.body.createTextRange();
+                range.moveToElementText(element);
+                range.select();
+            }
         }
     </script>
 </body>

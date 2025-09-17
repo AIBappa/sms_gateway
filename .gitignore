@@ -7,7 +7,12 @@ sms_env/
 # Ignore local config files
 sms_bridge_config.json
 
-# Ignore additional prompt
+# Ignore additional docs 
 docs/update_prompt1.md
+docs/REORGANIZATION_SUMMARY.md
+docs/CLEANUP_COMPLETE.md
+docs/prompt1.md
+docs/prompt2.md
 
-
+#Ignore log
+*.log

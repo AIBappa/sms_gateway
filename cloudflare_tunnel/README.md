@@ -37,12 +37,70 @@ Prerequisites
 - Access to the zone API token or Cloudflare Teams to create a tunnel
 - (Optional) `kubectl` access for K3s deployments
 
-Quick Example: Expose local Docker backend at http://localhost:8080 to https://sms.example.com
-1. Create a tunnel name and credentials using cloudflared (see below)
-2. Place `credentials-file.json` into this directory (or mount it via docker-compose)
-3. Update `config.yml` with your hostname (sms.example.com) and backend http://host.docker.internal:8080
-4. Start the tunnel: `./run_tunnel.sh up`
-5. Add a CNAME in Cloudflare DNS or use `cloudflared` to create the DNS record
+## Step-by-Step Setup Guide for K3s
+
+Follow these steps to connect your Cloudflare Tunnel to your local K3s cluster.
+
+### Step 1: Install and Authenticate the Connector
+
+The easiest way to start is by using the command provided in your Cloudflare Zero Trust dashboard after creating a tunnel.
+
+1.  In the Cloudflare dashboard, select your new tunnel and the correct operating system (Linux, Debian/Ubuntu).
+2.  You will be given a single command that looks like `cloudflared service install <YOUR_TOKEN>`.
+3.  Run this command on your Linux machine. It will:
+    *   Install the `cloudflared` software as a system service.
+    *   Create the necessary authentication file (`cert.pem`) in `/etc/cloudflared/`. This links the connector to your Cloudflare account.
+    *  Note: Cloudflare also displays another one time run command like `cloudflare tunnel run --token <YOUR_TOKEN>`. However note that this command will not work if the authentication file `cert.pem` has not been installed as per command in step 2 noted above.
+4. Check that the cloudflared tunnel is running using the following commands:
+    # Check if the service is running
+    sudo systemctl status cloudflared
+
+    # Get more detailed status
+    sudo systemctl is-active cloudflared
+
+### Step 2: Configure the Tunnel's Routing
+
+The connector is running, but it doesn't know what to expose yet. You must create a configuration file to define the routing rules.
+
+1.  Create a configuration file at `/etc/cloudflared/config.yml`.
+2.  Add the following content, replacing `sms-k3s.your-domain.com` with the public hostname you intend to use.
+
+    ```yaml
+    # /etc/cloudflared/config.yml
+    ingress:
+      # Rule 1: Route traffic for your public hostname to your internal K3s service.
+      - hostname: sms-k3s.your-domain.com
+        service: http://sms-receiver.sms-bridge.svc.cluster.local:8080
+      
+      # Rule 2: This is a required catch-all rule. It returns a 404 error
+      # for any requests that don't match the hostname above.
+      - service: http_status:404
+    ```
+
+### Step 3: Restart the Service and Verify
+
+Restart the `cloudflared` service to apply your new `config.yml`.
+
+```bash
+# Restart the service
+sudo systemctl restart cloudflared
+
+# Check its status to ensure it's running correctly
+sudo systemctl status cloudflared
+```
+
+### Step 4: Create the Public DNS Record
+
+The final step is to link your public hostname to the tunnel in Cloudflare's DNS.
+
+1.  Go to your Cloudflare DNS dashboard for your domain.
+2.  Create a `CNAME` record with the following details:
+    *   **Type:** `CNAME`
+    *   **Name:** `sms-k3s` (or the subdomain part of your hostname)
+    *   **Target:** `<YOUR_TUNNEL_ID>.cfargotunnel.com` (You can find your Tunnel ID in the Cloudflare dashboard).
+    *   **Proxy status:** Proxied (Orange Cloud).
+
+After these steps, any request to `https://sms-k3s.your-domain.com` will be securely routed through the tunnel to your local K3s `sms-receiver` service.
 
 Security notes
 - Keep `credentials-file.json` private (do not commit)
@@ -50,3 +108,5 @@ Security notes
 - Use short-lived or scoped API tokens when possible
 
 See other files for detailed instructions and examples.
+
+This updated guide should provide the clarity you need to get the tunnel up and running successfully. The API token you have is generally used for automating Cloudflare actions via scripts, but for this manual setup, the auto-generated installation command is all you need.

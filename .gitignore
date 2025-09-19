@@ -13,7 +13,7 @@ docs/REORGANIZATION_SUMMARY.md
 docs/CLEANUP_COMPLETE.md
 docs/prompt1.md
 docs/prompt2.md
-docs/CF_Integration.md
+docs/Integration.md
 
 #Ignore log
 *.log

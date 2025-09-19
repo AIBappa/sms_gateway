@@ -56,7 +56,7 @@ The SMS Bridge is a production-grade, high-performance batch validation pipeline
 **Key Features**:
 - Normalizes mobile numbers to extract country code and local number
 - Supports multiple country codes from system settings
-- Handles various input formats (+919699511296, 919699511296, 9699511296)
+- Handles various input formats (+9199XXYYZZAA, 9199XXYYZZAA, 99XXYYZZAA)
 
 **Database Connections**:
 - **PostgreSQL Tables**: `system_settings` (for allowed country codes)
@@ -200,7 +200,7 @@ When the Ansible K3s playbook (`setup_sms_bridge_k3s.yml`) executes:
 
 ```mermaid
 graph TD
-    A[SMS Received: +919699511296<br/>ONBOARD:hash123...] --> B[Extract & Store<br/>country_code=91<br/>local_mobile=9699511296]
+    A[SMS Received: +9199XXYYZZAA<br/>ONBOARD:hash123...] --> B[Extract & Store<br/>country_code=91<br/>local_mobile=99XXYYZZAA]
     B --> C[Batch Processor<br/>Sequential UUID Processing]
     C --> D[Start Validation Pipeline]
     
@@ -209,13 +209,13 @@ graph TD
     E -->|PASS| F[2. Blacklist Check<br/>count ≤ threshold?]
     
     F -->|FAIL| Z
-    F -->|PASS| G[3. Duplicate Check<br/>9699511296 ∉ Redis?]
+    F -->|PASS| G[3. Duplicate Check<br/>99XXYYZZAA ∉ Redis?]
     
     G -->|FAIL| Z  
     G -->|PASS| H[4. Header Hash Check<br/>ONBOARD: + hash valid?]
     
     H -->|FAIL| Z
-    H -->|PASS| I[5. Mobile Check<br/>9699511296 ∈ onboarding?]
+    H -->|PASS| I[5. Mobile Check<br/>99XXYYZZAA ∈ onboarding?]
     
     I -->|FAIL| Z
     I -->|PASS| J[6. Time Window Check<br/>SMS within window?]
@@ -296,7 +296,7 @@ The external CF backend can query the SMS Bridge for hash verification:
 **Endpoint**: `GET /hash/{mobile_number}`
 - **Purpose**: Verify if a mobile number has been onboarded and retrieve its hash
 - **Parameters**: 
-  - `mobile_number`: Full mobile number (e.g., +919699511296)
+  - `mobile_number`: Full mobile number (e.g., +9199XXYYZZAA)
 - **Response**: JSON with onboarding status and hash (if found)
 - **Authentication**: Bearer token required
 
@@ -311,9 +311,9 @@ When SMS messages pass all validation checks, they are forwarded to the external
 #### JSON Payload Structure
 ```json
 {
-  "mobile_number": "+919699511296",
+  "mobile_number": "+9199XXYYZZAA",
   "country_code": "91",
-  "local_mobile": "9699511296",
+  "local_mobile": "99XXYYZZAA",
   "message": "ONBOARD:abc123def456...",
   "received_timestamp": "2024-01-15T10:30:45.123456",
   "validation_results": {
@@ -342,7 +342,7 @@ When SMS messages pass all validation checks, they are forwarded to the external
 #### Alternative Form-Encoded Format
 The system also supports form-encoded data for compatibility:
 ```
-mobile_number=+919699511296&country_code=91&local_mobile=9699511296&message=ONBOARD:abc123...&received_timestamp=2024-01-15T10:30:45.123456&validation_results={"foreign_number_check":1,"blacklist_check":1,"duplicate_check":1,"header_hash_check":1,"mobile_check":1,"time_window_check":1}&batch_id=uuid-string&processed_at=2024-01-15T10:30:45.123456
+mobile_number=+9199XXYYZZAA&country_code=91&local_mobile=99XXYYZZAA&message=ONBOARD:abc123...&received_timestamp=2024-01-15T10:30:45.123456&validation_results={"foreign_number_check":1,"blacklist_check":1,"duplicate_check":1,"header_hash_check":1,"mobile_check":1,"time_window_check":1}&batch_id=uuid-string&processed_at=2024-01-15T10:30:45.123456
 ```
 
 ### Error Handling & Retry Logic
@@ -439,7 +439,7 @@ mobile_number=+919699511296&country_code=91&local_mobile=9699511296&message=ONBO
 
 ### Deployment & Infrastructure
 - **Containerized Deployment**: K3s-based container orchestration with Ansible automation
-- **Multi-format Mobile Support**: Handles various international number formats (+919699511296, 919699511296, 9699511296)
+- **Multi-format Mobile Support**: Handles various international number formats (+9199XXYYZZAA, 9199XXYYZZAA, 99XXYYZZAA)
 - **Onboarding System**: Complete mobile number registration and validation workflow
 - **Test Interface**: Mobile-friendly test application with tabbed SMS and onboarding interface
 - **External Integration**: Optional cloud backend forwarding for validated SMS messages
